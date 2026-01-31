@@ -1,0 +1,28 @@
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Model weights
+*.pth
+*.pt
+*.onnx
+
+# Data & outputs
+video/
+extracted_faces/
+extracted_frames/
+analysis_results/
+lip_sync_results/
+metadata_reports/
+multi_model_analysis_results/
+single_model_results/
+
+# IDE
+.vscode/
+
+# Temporary files
+*.json
+*.log
