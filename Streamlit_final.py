@@ -41,86 +41,41 @@ try:
     import editdistance
 except ImportError:
     st.warning("Lip sync modules not available. Lip sync analysis will be limited.")
+
 # =============================================================================
-# MODEL PATHS CONFIGURATION
+# WEIGHTED ENSEMBLE MODEL CONFIGURATION
 # =============================================================================
-MODEL_PATHS = {
-    # ==========================================================
-    # BASE / BENCHMARK MODELS
-    # ==========================================================
-    "Base FF++ Stage-3 Model":
-        "DEEPFAKE_MODELS/best_stage3_ffpp_frames.pth",
-
-    "Base Xception Face Model":
-        "DEEPFAKE_MODELS/xception_face_model.pth",
-
-    # ==========================================================
-    # CELEB-DF & IMAGE MIXED TRAINING (PROGRESSIVE LEVELS)
-    # ==========================================================
-    "Celeb + Image Model (Level 0 - Initial)":
-        "DEEPFAKE_MODELS/0-df.pth",
-
-    "Celeb + Image Model (Level 0.5)":
-        "DEEPFAKE_MODELS/0.5-df.pth",
-
-    "Celeb + Image Model (Level 1)":
-        "DEEPFAKE_MODELS/1-df.pth",
-
-    "Celeb + Image Model (Level 1.5 - Multi Fine-tuned)":
-        "DEEPFAKE_MODELS/1.5-df.pth",
-
-    "Celeb + Image Model (Level 2)":
-        "DEEPFAKE_MODELS/2-df.pth",
-
-    "Celeb + Image Model (Level 2.5 - Advanced)":
-        "DEEPFAKE_MODELS/2.5-df.pth",
-
-    # ==========================================================
-    # CELEB-DF SPECIALIZED MODELS
-    # ==========================================================
-    "Celeb-DF Fine-tuned (Best Model)":
-        "DEEPFAKE_MODELS/best_celebf_finetuned.pth",
-
-    "Celeb-DF Training Checkpoint (Latest)":
-        "DEEPFAKE_MODELS/latest_celebf_checkpoint.pth",
-
-    # ==========================================================
-    # XCEPTION – FINE-TUNED & PROGRESSIVE TRAINING
-    # ==========================================================
-    "Xception Fine-tuned (Level 1)":
-        "DEEPFAKE_MODELS/fine_tuned_xception_model/best_fine_tuned_model.pth",
-
-    "Xception Progressive Fine-tuned (Level 2)":
-        "DEEPFAKE_MODELS/progressive_fine_tuned_model/2nd_tuned_xception_model.pth",
-
-    "Xception Progressive Fine-tuned (Final)":
-        "DEEPFAKE_MODELS/progressive_fine_tuned_model/final_progressive_model.pth",
-
-    # ==========================================================
-    # NEW / EXPERIMENTAL MODELS
-    # ==========================================================
-    "New Deepfake Model (Experimental – Epoch 10)":
-        "DEEPFAKE_MODELS/new_deepfake_model/checkpoint_epoch_10.pth",
-
-    "New Deepfake Model (Working – Unverified)":
-        "DEEPFAKE_MODELS/new_deepfake_model/unknown_working_model.pth",
-
-    # ==========================================================
-    # PRODUCTION / DEPLOYMENT READY
-    # ==========================================================
-    "Best EfficientNet-B4 Model (Production)":
-        "DEEPFAKE_MODELS/best_B4_model.pth",
-
-    "Xception Face Model (Deployment Ready)":
-        "DEEPFAKE_MODELS/xception_deepfake_model/best_face_model.pth",
-
-    # ==========================================================
-    # TRAINING RESUME CHECKPOINTS
-    # ==========================================================
-    "FF++ Stage-3 Training Checkpoint (Latest)":
-        "DEEPFAKE_MODELS/latest_stage3_checkpoint.pth",
+WEIGHTED_ENSEMBLE_MODELS = {
+    # Primary weighted ensemble models
+    "Celeb + Image Model (Level 2.5 - Advanced)": {
+        "path": "DEEPFAKE_MODELS/2.5-df.pth",
+        "weight": 0.50
+    },
+    "Xception Progressive Fine-tuned (Level 2)": {
+        "path": "DEEPFAKE_MODELS/progressive_fine_tuned_model/2nd_tuned_xception_model.pth",
+        "weight": 0.30
+    },
+    "New Deepfake Model (Experimental – Epoch 10)": {
+        "path": "DEEPFAKE_MODELS/new_deepfake_model/checkpoint_epoch_10.pth",
+        "weight": 0.20
+    }
 }
 
+# Safety layer model (must also say REAL for final REAL verdict)
+SAFETY_MODEL = {
+    "Xception Model (Deployment Ready)": {
+        "path": "DEEPFAKE_MODELS/xception_deepfake_model/best_face_model.pth",
+        "weight": 0.0  # Not part of weighted score, only for safety check
+    }
+}
+
+# Models to exclude (biased)
+EXCLUDED_MODELS = [
+    "Celeb-DF Fine-tuned (Best Model)",
+    "Base FF++ Stage-3 Model", 
+    "Xception Fine-tuned (Level 1)",
+    "FF++ Stage-3 Training Checkpoint (Latest)"
+]
 
 # =============================================================================
 # LIP SYNC CONFIGURATION
@@ -805,7 +760,7 @@ Analysis completed.
         st.code(output, language="text")
 
 # =============================================================================
-# METADATA ANALYSIS UTILITIES (Existing)
+# METADATA ANALYSIS UTILITIES
 # =============================================================================
 
 def run_ffprobe_json(path: str):
@@ -922,7 +877,6 @@ def compare_against_baseline(feat, baseline):
     summary = "✅ No major metadata differences found." if not issues else f"⚠️ {len(issues)} differences detected."
     return {"summary": summary, "issues": issues}
 
-
 # =============================================================================
 # FRAME EXTRACTOR
 # =============================================================================
@@ -989,7 +943,6 @@ class FrameExtractor:
             progress_bar.progress(1.0)
             status.update(label=f"✅ **Frame Extraction Complete** - Extracted {len(extracted_frames)} frames", state="complete")
         return extracted_frames
-
 
 # =============================================================================
 # FACE DETECTOR
@@ -1070,22 +1023,21 @@ class RetinaFaceDetector:
                     st.info(f"🎯 **Average Confidence:** {avg_confidence:.3f}")
         return all_faces
 
-
 # =============================================================================
-# DEEPFAKE DETECTOR
+# DEEPFAKE DETECTOR WITH WEIGHTED ENSEMBLE
 # =============================================================================
 
 class DeepFakeDetector:
-    """Deepfake detection using trained models."""
-    def __init__(self, model_path, model_name=""):
+    """Deepfake detection using weighted ensemble of models."""
+    def __init__(self):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.model_path = model_path
-        self.model_name = model_name
-        self.model = self.load_model(model_path)
+        self.ensemble_models = {}
+        self.safety_model = None
         self.transform = self.get_transform()
+        self.load_ensemble_models()
     
-    def load_model(self, model_path):
-        """Load the deepfake detection model."""
+    def load_model(self, model_path, model_name=""):
+        """Load a single deepfake detection model."""
         if not os.path.exists(model_path):
             st.error(f"❌ Model file not found: {model_path}")
             return None
@@ -1117,12 +1069,30 @@ class DeepFakeDetector:
             model.load_state_dict(state_dict, strict=False)
             
         except Exception as e:
-            st.error(f"❌ Error loading model {self.model_name}: {e}")
+            st.error(f"❌ Error loading model {model_name}: {e}")
             return None
         
         model.to(self.device)
         model.eval()
         return model
+    
+    def load_ensemble_models(self):
+        """Load all weighted ensemble models and safety model."""
+        # Load weighted ensemble models
+        for model_name, model_info in WEIGHTED_ENSEMBLE_MODELS.items():
+            with st.spinner(f"Loading {model_name}..."):
+                model = self.load_model(model_info["path"], model_name)
+                if model:
+                    self.ensemble_models[model_name] = {
+                        "model": model,
+                        "weight": model_info["weight"]
+                    }
+        
+        # Load safety model
+        safety_name = list(SAFETY_MODEL.keys())[0]
+        safety_info = SAFETY_MODEL[safety_name]
+        with st.spinner(f"Loading safety model {safety_name}..."):
+            self.safety_model = self.load_model(safety_info["path"], safety_name)
     
     def get_transform(self):
         """Get image transformation pipeline."""
@@ -1133,34 +1103,72 @@ class DeepFakeDetector:
         ])
     
     def predict_single_face(self, face_path):
-        """Predict if a single face is real or fake."""
-        if self.model is None:
+        """Predict if a single face is real or fake using weighted ensemble."""
+        if not self.ensemble_models:
             return None
             
         try:
             image = Image.open(face_path).convert('RGB')
             image_tensor = self.transform(image).unsqueeze(0).to(self.device)
             
-            with torch.no_grad():
-                output = self.model(image_tensor)
-                probability = output.item()
-                prediction = "FAKE" if probability > 0.5 else "REAL"
-                confidence = probability if prediction == "FAKE" else 1 - probability
+            # Get predictions from all ensemble models
+            ensemble_predictions = []
+            model_details = {}
+            
+            for model_name, model_info in self.ensemble_models.items():
+                model = model_info["model"]
+                weight = model_info["weight"]
+                
+                with torch.no_grad():
+                    output = model(image_tensor)
+                    probability = output.item()
+                    prediction = "FAKE" if probability > 0.5 else "REAL"
+                    confidence = probability if prediction == "FAKE" else 1 - probability
+                    
+                    model_details[model_name] = {
+                        'prediction': prediction,
+                        'confidence': float(confidence),
+                        'fake_probability': float(probability),
+                        'weight': float(weight)
+                    }
+                    
+                    # Calculate weighted score contribution
+                    weighted_score = probability * weight
+                    ensemble_predictions.append(weighted_score)
+            
+            # Calculate weighted ensemble score
+            weighted_score = sum(ensemble_predictions)
+            
+            # Get safety model prediction if available
+            safety_prediction = None
+            if self.safety_model:
+                with torch.no_grad():
+                    safety_output = self.safety_model(image_tensor)
+                    safety_probability = safety_output.item()
+                    safety_prediction = "FAKE" if safety_probability > 0.5 else "REAL"
+            
+            # Apply decision rule: score ≥ 0.5 → FAKE
+            ensemble_prediction = "FAKE" if weighted_score >= 0.5 else "REAL"
+            
+            # Apply safety layer: If ensemble says REAL, require safety model to also say REAL
+            if ensemble_prediction == "REAL" and safety_prediction == "FAKE":
+                ensemble_prediction = "FAKE"  # Override to FAKE if safety model disagrees
             
             return {
-                'prediction': prediction,
-                'confidence': float(confidence),
-                'fake_probability': float(probability),
-                'real_probability': float(1 - probability),
-                'model_name': self.model_name
+                'prediction': ensemble_prediction,
+                'weighted_score': float(weighted_score),
+                'model_details': model_details,
+                'safety_prediction': safety_prediction,
+                'safety_override': (ensemble_prediction == "REAL" and safety_prediction == "FAKE"),
+                'is_ensemble': True
             }
         
         except Exception as e:
             return None
     
     def predict_multiple_faces(self, face_data_list):
-        """Predict multiple faces."""
-        if self.model is None:
+        """Predict multiple faces using weighted ensemble."""
+        if not self.ensemble_models:
             return []
             
         results = []
@@ -1187,9 +1195,8 @@ class DeepFakeDetector:
         
         return results
 
-
 # =============================================================================
-# METADATA ANALYZER (Existing)
+# METADATA ANALYZER
 # =============================================================================
 
 class MetadataAnalyzer:
@@ -1318,37 +1325,42 @@ class MetadataAnalyzer:
         
         return baseline
 
-
 # =============================================================================
-# MODIFIED PIPELINES WITH METADATA INTEGRATION
+# DEEPFAKE ANALYSIS PIPELINE (Weighted Ensemble)
 # =============================================================================
 
-class SingleModelAnalysisPipeline:
-    """Pipeline for single model analysis with face detection AND metadata."""
+class DeepfakeAnalysisPipeline:
+    """Pipeline for deepfake analysis using weighted ensemble."""
     def __init__(self):
         self.frame_extractor = FrameExtractor()
         self.face_detector = RetinaFaceDetector()
-        self.metadata_analyzer = MetadataAnalyzer()
-        self.forensic_analyzer = CompleteForensicMetadataAnalyzer()
-        self.results_dir = "single_model_results"
+        self.detector = DeepFakeDetector()
+        self.results_dir = "deepfake_results"
         os.makedirs(self.results_dir, exist_ok=True)
     
-    def analyze_video(self, video_path, model_path, model_name, frames_per_second=1, baseline_name=None):
-        """Analyze video with single model, face detection, AND metadata."""
+    def analyze_video(self, video_path, frames_per_second=1):
+        """Analyze video with weighted ensemble deepfake detection."""
         # Main header
         st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 1.5rem; border-radius: 15px; margin-bottom: 2rem;">
-            <h2 style="color: white; text-align: center; margin: 0; font-size: 2rem;">🔍 Single Model Analysis</h2>
-            <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1rem;">Deepfake Detection + Metadata Analysis</p>
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; margin-bottom: 2rem;">
+            <h1 style="color: white; text-align: center; margin: 0; font-size: 2.5rem;">🤖 Deepfake Detection (Weighted Ensemble)</h1>
+            <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1.2rem;">Weighted Ensemble: Celeb 2.5 (50%) + Xception L2 (30%) + New DF Epoch10 (20%)</p>
         </div>
         """, unsafe_allow_html=True)
         
-        # Store all results
-        all_results = {
-            "deepfake_analysis": None,
-            "metadata_analysis": None,
-            "forensic_analysis": None
-        }
+        # Display ensemble configuration
+        st.markdown("### 🎯 Ensemble Configuration")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Celeb 2.5", "50%", "Primary Model")
+        with col2:
+            st.metric("Xception L2", "30%", "Support Model")
+        with col3:
+            st.metric("New DF E10", "20%", "Experimental")
+        with col4:
+            st.metric("Safety Layer", "Active", "Xception Deployment")
+        
+        st.info("**Decision Rule:** Weighted score ≥ 0.5 → FAKE | **Safety:** REAL requires Xception Deployment confirmation")
         
         # Step 1: Frame Extraction
         with st.container():
@@ -1366,48 +1378,27 @@ class SingleModelAnalysisPipeline:
                 st.error("❌ No faces detected. Exiting.")
                 return None
         
-        # Step 3: Initialize Model
+        # Step 3: Deepfake Analysis
         with st.container():
-            st.markdown("### 🤖 STEP 3: Model Initialization")
-            detector = DeepFakeDetector(model_path, model_name)
-            if detector.model is None:
-                st.error("❌ Model failed to load. Exiting.")
-                return None
-        
-        # Step 4: Deepfake Analysis
-        with st.container():
-            st.markdown("### 🧪 STEP 4: Deepfake Analysis")
-            with st.spinner("Analyzing faces..."):
-                predictions = detector.predict_multiple_faces(faces)
+            st.markdown("### 🧪 STEP 3: Weighted Ensemble Analysis")
+            with st.spinner("Analyzing faces with weighted ensemble..."):
+                predictions = self.detector.predict_multiple_faces(faces)
             
             if not predictions:
                 st.error("❌ No predictions generated.")
                 return None
             
-            # Generate deepfake report
-            deepfake_report = self.generate_report(predictions, video_path, model_name)
-            all_results["deepfake_analysis"] = deepfake_report
+            # Generate report
+            report = self.generate_report(predictions, video_path)
         
-        # Step 5: Metadata Analysis
+        # Step 4: Display Results
         with st.container():
-            st.markdown("### 📋 STEP 5: Metadata Analysis")
-            metadata_report = self.metadata_analyzer.create_metadata_report(video_path, baseline_name)
-            if metadata_report:
-                all_results["metadata_analysis"] = metadata_report
-            
-            # Run forensic analysis
-            forensic_report = self.forensic_analyzer.analyze_video(video_path)
-            if forensic_report:
-                all_results["forensic_analysis"] = forensic_report
+            st.markdown("### 📊 STEP 4: Analysis Results")
+            self.display_results(report, video_path)
         
-        # Step 6: Display Results
-        with st.container():
-            st.markdown("### 📊 STEP 6: Analysis Results")
-            self.display_combined_results(all_results, video_path, deepfake_report)
-        
-        return all_results
+        return report
     
-    def generate_report(self, predictions, video_path, model_name):
+    def generate_report(self, predictions, video_path):
         """Generate analysis report."""
         total_faces = len(predictions)
         
@@ -1415,308 +1406,218 @@ class SingleModelAnalysisPipeline:
             st.error("❌ No faces were successfully analyzed.")
             return None
         
+        # Calculate statistics
         fake_faces = sum(1 for pred in predictions if pred['prediction'] == 'FAKE')
         real_faces = total_faces - fake_faces
         
-        fake_confidence_avg = float(np.mean([pred['confidence'] for pred in predictions if pred['prediction'] == 'FAKE'])) if fake_faces > 0 else 0.0
-        real_confidence_avg = float(np.mean([pred['confidence'] for pred in predictions if pred['prediction'] == 'REAL'])) if real_faces > 0 else 0.0
+        weighted_scores = [pred['weighted_score'] for pred in predictions]
+        avg_weighted_score = float(np.mean(weighted_scores)) if weighted_scores else 0.0
+        
+        # Model contributions
+        model_contributions = {}
+        for pred in predictions:
+            for model_name, details in pred.get('model_details', {}).items():
+                if model_name not in model_contributions:
+                    model_contributions[model_name] = {
+                        'fake_count': 0,
+                        'real_count': 0,
+                        'total': 0,
+                        'weight': details['weight']
+                    }
+                
+                model_contributions[model_name]['total'] += 1
+                if details['prediction'] == 'FAKE':
+                    model_contributions[model_name]['fake_count'] += 1
+                else:
+                    model_contributions[model_name]['real_count'] += 1
+        
+        # Safety layer statistics
+        safety_overrides = sum(1 for pred in predictions if pred.get('safety_override', False))
         
         report = {
             'video_path': video_path,
-            'model_name': model_name,
             'analysis_timestamp': str(np.datetime64('now')),
-            'total_faces_analyzed': int(total_faces),
-            'fake_faces_detected': int(fake_faces),
-            'real_faces_detected': int(real_faces),
-            'fake_percentage': float((fake_faces / total_faces * 100) if total_faces > 0 else 0),
-            'average_fake_confidence': float(fake_confidence_avg),
-            'average_real_confidence': float(real_confidence_avg),
-            'overall_verdict': "LIKELY FAKE" if fake_faces > real_faces else "LIKELY REAL",
-            'confidence_score': float(max(fake_confidence_avg, real_confidence_avg)),
-            'detailed_analysis': predictions
-        }
-        
-        # Save report
-        report_path = os.path.join(self.results_dir, f"analysis_{os.path.basename(video_path)}_{model_name}.json")
-        try:
-            with open(report_path, 'w') as f:
-                json.dump(report, f, indent=2, cls=NumpyEncoder)
-            st.success(f"✅ Report saved: {report_path}")
-        except Exception as e:
-            st.error(f"❌ Error saving report: {e}")
-        
-        return report
-    
-    def display_combined_results(self, all_results, video_path, deepfake_report):
-        """Display combined deepfake and metadata results."""
-        # Deepfake results
-        st.markdown("## 🎯 DEEPFAKE ANALYSIS RESULTS")
-        st.markdown("---")
-        
-        if deepfake_report:
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Model Used", deepfake_report['model_name'])
-            with col2:
-                st.metric("Faces Analyzed", deepfake_report['total_faces_analyzed'])
-            with col3:
-                st.metric("Fake %", f"{deepfake_report['fake_percentage']:.1f}%")
-            with col4:
-                verdict = deepfake_report['overall_verdict']
-                verdict_color = "#FF6B6B" if verdict == "LIKELY FAKE" else "#4ECDC4"
-                st.markdown(f"""
-                <div style="background: {verdict_color}; padding: 0.5rem; border-radius: 10px; text-align: center;">
-                    <h4 style="color: white; margin: 0;">Verdict: {verdict}</h4>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Visualization
-            df = pd.DataFrame(deepfake_report['detailed_analysis'])
-            
-            # Results Distribution Pie Chart
-            fig_pie = px.pie(
-                names=['Real', 'Fake'],
-                values=[deepfake_report['real_faces_detected'], deepfake_report['fake_faces_detected']],
-                title='Detection Results',
-                color=['Real', 'Fake'],
-                color_discrete_map={'Real': '#4ECDC4', 'Fake': '#FF6B6B'}
-            )
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
-        
-        # Metadata results
-        forensic_report = all_results.get("forensic_analysis")
-        if forensic_report:
-            st.markdown("---")
-            st.markdown("## 🔍 METADATA ANALYSIS RESULTS")
-            st.markdown("=" * 70)
-            self.forensic_analyzer.display_detailed_forensic_report(forensic_report, video_path)
-    
-    def display_detailed_forensic_report(self, forensic_report, video_path):
-        """Display forensic metadata analysis."""
-        self.forensic_analyzer.display_detailed_forensic_report(forensic_report, video_path)
-
-class MultiModelAnalysisPipeline:
-    """Pipeline for multi-model ensemble analysis with face detection AND metadata."""
-    def __init__(self):
-        self.frame_extractor = FrameExtractor()
-        self.face_detector = RetinaFaceDetector()
-        self.metadata_analyzer = MetadataAnalyzer()
-        self.forensic_analyzer = CompleteForensicMetadataAnalyzer()
-        self.results_dir = "multi_model_results"
-        os.makedirs(self.results_dir, exist_ok=True)
-    
-    def analyze_video(self, video_path, selected_models, frames_per_second=1, baseline_name=None):
-        """Analyze video with multiple models, face detection, AND metadata."""
-        # Main header
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 1.5rem; border-radius: 15px; margin-bottom: 2rem;">
-            <h2 style="color: white; text-align: center; margin: 0; font-size: 2rem;">🤖 Multi-Model Ensemble Analysis</h2>
-            <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1rem;">Ensemble Deepfake Detection + Metadata Analysis</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Store all results
-        all_results = {
-            "deepfake_analysis": None,
-            "metadata_analysis": None,
-            "forensic_analysis": None
-        }
-        
-        # Step 1: Frame Extraction
-        with st.container():
-            st.markdown("### 🎬 STEP 1: Frame Extraction")
-            frames = self.frame_extractor.extract_frames(video_path, frames_per_second)
-            if not frames:
-                st.error("❌ No frames extracted. Exiting.")
-                return None
-        
-        # Step 2: Face Detection
-        with st.container():
-            st.markdown("### 👤 STEP 2: Face Detection")
-            faces = self.face_detector.detect_and_extract_faces(frames)
-            if not faces:
-                st.error("❌ No faces detected. Exiting.")
-                return None
-        
-        # Step 3: Initialize Models
-        with st.container():
-            st.markdown("### 🤖 STEP 3: Model Initialization")
-            detectors = {}
-            for model_name, model_path in selected_models.items():
-                detector = DeepFakeDetector(model_path, model_name)
-                if detector.model is not None:
-                    detectors[model_name] = detector
-            
-            if not detectors:
-                st.error("❌ No models loaded successfully.")
-                return None
-        
-        # Step 4: Multi-model analysis
-        with st.container():
-            st.markdown("### 🔍 STEP 4: Multi-Model Analysis")
-            all_predictions = {}
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for i, (model_name, detector) in enumerate(detectors.items()):
-                status_text.text(f"Analyzing with {model_name}...")
-                with st.spinner(f"Processing {model_name}..."):
-                    predictions = detector.predict_multiple_faces(faces)
-                    all_predictions[model_name] = predictions
-                
-                progress = float((i + 1) / len(detectors))
-                progress_bar.progress(progress)
-            
-            # Generate ensemble report
-            ensemble_report = self.generate_ensemble_report(all_predictions, video_path, faces)
-            all_results["deepfake_analysis"] = ensemble_report
-        
-        # Step 5: Metadata Analysis
-        with st.container():
-            st.markdown("### 📋 STEP 5: Metadata Analysis")
-            metadata_report = self.metadata_analyzer.create_metadata_report(video_path, baseline_name)
-            if metadata_report:
-                all_results["metadata_analysis"] = metadata_report
-            
-            # Run forensic analysis
-            forensic_report = self.forensic_analyzer.analyze_video(video_path)
-            if forensic_report:
-                all_results["forensic_analysis"] = forensic_report
-        
-        # Step 6: Display Results
-        with st.container():
-            st.markdown("### 📊 STEP 6: Analysis Results")
-            self.display_combined_results(all_results, video_path, ensemble_report)
-        
-        return all_results
-    
-    def generate_ensemble_report(self, all_predictions, video_path, faces):
-        """Generate ensemble analysis report."""
-        model_reports = {}
-        
-        for model_name, predictions in all_predictions.items():
-            if not predictions:
-                continue
-                
-            total_faces = len(predictions)
-            fake_faces = sum(1 for pred in predictions if pred['prediction'] == 'FAKE')
-            real_faces = total_faces - fake_faces
-            
-            fake_confidence_avg = float(np.mean([pred['confidence'] for pred in predictions if pred['prediction'] == 'FAKE'])) if fake_faces > 0 else 0.0
-            real_confidence_avg = float(np.mean([pred['confidence'] for pred in predictions if pred['prediction'] == 'REAL'])) if real_faces > 0 else 0.0
-            
-            model_reports[model_name] = {
+            'analysis_mode': 'Weighted Ensemble Deepfake Detection',
+            'ensemble_config': {
+                'models': {k: v['weight'] for k, v in WEIGHTED_ENSEMBLE_MODELS.items()},
+                'safety_model': list(SAFETY_MODEL.keys())[0],
+                'decision_threshold': 0.5,
+                'safety_rule': 'REAL requires safety model confirmation'
+            },
+            'results_summary': {
                 'total_faces_analyzed': int(total_faces),
                 'fake_faces_detected': int(fake_faces),
                 'real_faces_detected': int(real_faces),
                 'fake_percentage': float((fake_faces / total_faces * 100) if total_faces > 0 else 0),
-                'average_fake_confidence': float(fake_confidence_avg),
-                'average_real_confidence': float(real_confidence_avg),
-                'overall_verdict': "LIKELY FAKE" if fake_faces > real_faces else "LIKELY REAL",
-                'confidence_score': float(max(fake_confidence_avg, real_confidence_avg))
-            }
-        
-        # Calculate ensemble results
-        if model_reports:
-            fake_percentages = [report['fake_percentage'] for report in model_reports.values()]
-            ensemble_fake_percentage = np.mean(fake_percentages) if fake_percentages else 0
-            
-            model_reports['ENSEMBLE'] = {
-                'fake_percentage': float(ensemble_fake_percentage),
-                'overall_verdict': "LIKELY FAKE" if ensemble_fake_percentage > 50 else "LIKELY REAL",
-                'confidence_score': float(np.mean([r['confidence_score'] for r in model_reports.values()]))
-            }
-        
-        report = {
-            'video_path': video_path,
-            'analysis_timestamp': str(np.datetime64('now')),
-            'models_used': list(all_predictions.keys()),
-            'total_faces_detected': len(faces),
-            'model_reports': model_reports,
-            'ensemble_report': model_reports.get('ENSEMBLE', {}),
-            'all_predictions': all_predictions
+                'avg_weighted_score': float(avg_weighted_score),
+                'safety_overrides': int(safety_overrides),
+                'final_verdict': "LIKELY FAKE" if fake_faces > real_faces else "LIKELY REAL"
+            },
+            'model_contributions': model_contributions,
+            'detailed_predictions': predictions
         }
         
         # Save report
-        report_path = os.path.join(self.results_dir, f"ensemble_analysis_{os.path.basename(video_path)}.json")
+        report_path = os.path.join(
+            self.results_dir, 
+            f"deepfake_{os.path.basename(video_path)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        )
+        
         try:
             with open(report_path, 'w') as f:
                 json.dump(report, f, indent=2, cls=NumpyEncoder)
-            st.success(f"✅ Ensemble report saved: {report_path}")
+            st.success(f"✅ Deepfake report saved: {report_path}")
         except Exception as e:
             st.error(f"❌ Error saving report: {e}")
         
         return report
     
-    def display_combined_results(self, all_results, video_path, ensemble_report):
-        """Display combined deepfake and metadata results."""
-        # Deepfake results
-        st.markdown("## 🎯 ENSEMBLE DEEPFAKE ANALYSIS")
-        st.markdown("---")
+    def display_results(self, report, video_path):
+        """Display analysis results."""
+        if not report:
+            return
         
-        if ensemble_report:
-            ensemble = ensemble_report.get('ensemble_report', {})
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Models Used", len(ensemble_report.get('models_used', [])))
-            with col2:
-                st.metric("Total Faces", ensemble_report.get('total_faces_detected', 0))
-            with col3:
-                fake_percentage = ensemble.get('fake_percentage', 0)
-                st.metric("Ensemble Fake %", f"{fake_percentage:.1f}%")
-            with col4:
-                verdict = ensemble.get('overall_verdict', 'UNKNOWN')
-                verdict_color = "#FF6B6B" if verdict == "LIKELY FAKE" else "#4ECDC4"
-                st.markdown(f"""
-                <div style="background: {verdict_color}; padding: 0.5rem; border-radius: 10px; text-align: center;">
-                    <h4 style="color: white; margin: 0;">Verdict: {verdict}</h4>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Model comparison chart
-            model_names = []
-            fake_percentages = []
-            
-            for model_name, model_report in ensemble_report.get('model_reports', {}).items():
-                if model_name != 'ENSEMBLE':
-                    model_names.append(model_name)
-                    fake_percentages.append(model_report.get('fake_percentage', 0))
-            
-            if model_names:
-                comparison_data = pd.DataFrame({
-                    'Model': model_names,
-                    'Fake Percentage': fake_percentages
+        summary = report.get('results_summary', {})
+        
+        # Display key metrics
+        st.markdown("### 🎯 Detection Results")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Faces", summary.get('total_faces_analyzed', 0))
+        with col2:
+            fake_percentage = summary.get('fake_percentage', 0)
+            st.metric("Fake %", f"{fake_percentage:.1f}%")
+        with col3:
+            avg_score = summary.get('avg_weighted_score', 0)
+            st.metric("Avg Weighted Score", f"{avg_score:.3f}")
+        with col4:
+            safety_overrides = summary.get('safety_overrides', 0)
+            st.metric("Safety Overrides", safety_overrides)
+        
+        # Display final verdict
+        verdict = summary.get('final_verdict', 'UNKNOWN')
+        fake_percentage = summary.get('fake_percentage', 0)
+        
+        if verdict == "LIKELY FAKE":
+            verdict_color = "#FF6B6B"
+            icon = "❌"
+            message = f"FAKE DETECTED: {fake_percentage:.1f}% of faces show deepfake artifacts"
+        else:
+            verdict_color = "#06D6A0"
+            icon = "✅"
+            message = f"REAL: Only {fake_percentage:.1f}% of faces show potential artifacts"
+        
+        st.markdown(f"""
+        <div style="background: {verdict_color}; padding: 1.5rem; border-radius: 10px; text-align: center; margin: 1rem 0;">
+            <h2 style="color: white; margin: 0;">{icon} Final Verdict: {verdict}</h2>
+            <p style="color: white; margin: 0.5rem 0 0 0; font-size: 1.1rem;">{message}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Model contributions visualization
+        st.markdown("### 🤖 Model Contributions")
+        
+        model_data = []
+        for model_name, stats in report.get('model_contributions', {}).items():
+            if stats['total'] > 0:
+                fake_pct = (stats['fake_count'] / stats['total'] * 100) if stats['total'] > 0 else 0
+                model_data.append({
+                    'Model': model_name,
+                    'Weight': stats['weight'],
+                    'Fake %': fake_pct,
+                    'Total Faces': stats['total']
                 })
-                
-                fig_comparison = px.bar(
-                    comparison_data,
-                    x='Model',
-                    y='Fake Percentage',
-                    title='Model Performance Comparison',
-                    color='Fake Percentage',
-                    color_continuous_scale='RdYlGn_r'
-                )
-                fig_comparison.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig_comparison, use_container_width=True)
         
-        # Metadata results
-        forensic_report = all_results.get("forensic_analysis")
-        if forensic_report:
-            st.markdown("---")
-            st.markdown("## 🔍 METADATA ANALYSIS RESULTS")
-            st.markdown("=" * 70)
-            self.forensic_analyzer.display_detailed_forensic_report(forensic_report, video_path)
-    
-    def display_detailed_forensic_report(self, forensic_report, video_path):
-        """Display forensic metadata analysis."""
-        self.forensic_analyzer.display_detailed_forensic_report(forensic_report, video_path)
+        if model_data:
+            df_models = pd.DataFrame(model_data)
+            fig = px.bar(
+                df_models,
+                x='Model',
+                y='Fake %',
+                color='Weight',
+                title='Model Contributions to Fake Detection',
+                labels={'Fake %': 'Fake Faces (%)'},
+                color_continuous_scale='RdYlGn_r'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Weighted score distribution
+        st.markdown("### 📊 Weighted Score Distribution")
+        weighted_scores = [pred['weighted_score'] for pred in report.get('detailed_predictions', [])]
+        
+        if weighted_scores:
+            fig_hist = px.histogram(
+                x=weighted_scores,
+                nbins=20,
+                title='Distribution of Weighted Scores',
+                labels={'x': 'Weighted Score', 'y': 'Count'},
+                color_discrete_sequence=['#667eea']
+            )
+            fig_hist.add_vline(x=0.5, line_dash="dash", line_color="red", 
+                             annotation_text="Decision Threshold", 
+                             annotation_position="top")
+            st.plotly_chart(fig_hist, use_container_width=True)
+            
+            # Add statistics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Mean Score", f"{np.mean(weighted_scores):.3f}")
+            with col2:
+                st.metric("Std Dev", f"{np.std(weighted_scores):.3f}")
+            with col3:
+                above_threshold = sum(1 for s in weighted_scores if s >= 0.5)
+                st.metric("Above Threshold", f"{above_threshold}/{len(weighted_scores)}")
 
 # =============================================================================
-# LIP SYNC ANALYSIS CLASS
+# LIP SYNC ANALYSIS
 # =============================================================================
+
+# Add project root to path
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT_DIR))
+
+@st.cache_resource
+def load_model():
+    # Force GPU only - raise error if CUDA not available
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA (GPU) is not available. This application requires GPU for lip sync analysis.")
+    
+    device = torch.device("cuda")
+    st.info(f"🔥 Using device: {device}")
+    
+    char_to_idx, idx_to_char = build_vocab()
+    model = LipReadingModel(len(char_to_idx) + 1).to(device)
+    model.load_state_dict(torch.load(LIPSYNC_CONFIG["MODEL_PATH"], map_location=device))
+    model.eval()
+    
+    return model, device, idx_to_char
+
+def greedy_decode(probs, idx_to_char):
+    blank = 0
+    prev = None
+    out = []
+
+    for p in probs.argmax(dim=-1):
+        p = p.item()
+        if p != blank and p != prev:
+            out.append(idx_to_char.get(p, ""))
+        prev = p
+
+    return "".join(out)
+
+def cer(a, b):
+    if len(b) == 0:
+        return 0.0
+    import editdistance
+    return editdistance.eval(a, b) / len(b)
+
+def language_quality(text):
+    words = text.split()
+    if len(words) == 0:
+        return 0.0
+    avg_len = sum(len(w) for w in words) / len(words)
+    return avg_len
 
 class LipSyncAnalyzer:
     """Lip synchronization analysis for deepfake detection."""
@@ -1729,49 +1630,17 @@ class LipSyncAnalyzer:
         self.results_dir = "lip_sync_results"
         os.makedirs(self.results_dir, exist_ok=True)
     
-    @st.cache_resource
-    def load_model(_self):
-        """Load lip reading model."""
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+    def load_model_wrapper(self):
+        """Load lip reading model with GPU only."""
         try:
-            char_to_idx, idx_to_char = build_vocab()
-            model = LipReadingModel(len(char_to_idx) + 1).to(device)
-            model.load_state_dict(torch.load(_self.config["MODEL_PATH"], map_location=device))
-            model.eval()
-            
-            return model, device, idx_to_char
+            self.model, self.device, self.idx_to_char = load_model()
+            return True
+        except RuntimeError as e:
+            st.error(f"❌ {str(e)}")
+            return False
         except Exception as e:
             st.error(f"❌ Error loading lip sync model: {e}")
-            return None, device, None
-    
-    def greedy_decode(self, probs, idx_to_char):
-        """Greedy CTC decoder."""
-        blank = 0
-        prev = None
-        out = []
-        
-        for p in probs.argmax(dim=-1):
-            p = p.item()
-            if p != blank and p != prev:
-                out.append(idx_to_char.get(p, ""))
-            prev = p
-        
-        return "".join(out)
-    
-    def cer(self, a, b):
-        """Calculate Character Error Rate."""
-        if len(b) == 0:
-            return 0.0
-        return editdistance.eval(a, b) / len(b)
-    
-    def language_quality(self, text):
-        """Calculate language quality score."""
-        words = text.split()
-        if len(words) == 0:
-            return 0.0
-        avg_len = sum(len(w) for w in words) / len(words)
-        return avg_len
+            return False
     
     def analyze_video(self, video_path, cer_threshold=None, conf_threshold=None, freeze_limit=None):
         """Perform lip sync analysis on video."""
@@ -1788,28 +1657,51 @@ class LipSyncAnalyzer:
         cer_threshold = cer_threshold or self.config["CER_THRESHOLD"]
         conf_threshold = conf_threshold or self.config["CONF_THRESHOLD"]
         freeze_limit = freeze_limit or self.config["FREEZE_LIMIT"]
+        seq_len = self.config["SEQ_LEN"]
         
         # Step 1: Load model
         with st.container():
             st.markdown("### 🤖 STEP 1: Loading Lip Reading Model")
-            with st.spinner("Loading model..."):
-                self.model, self.device, self.idx_to_char = self.load_model()
-            
-            if self.model is None or self.idx_to_char is None:
-                st.error("❌ Failed to load lip sync model")
-                return None
+            with st.spinner("Loading model (GPU only)..."):
+                if not self.load_model_wrapper():
+                    st.error("❌ Failed to load lip sync model")
+                    return None
             
             st.success(f"✅ Model loaded successfully on {self.device}")
         
-        # Step 2: Analyze video
+        # Step 2: Initialize video analysis
         with st.container():
             st.markdown("### 🎬 STEP 2: Video Analysis")
             
             # Initialize video capture
             cap = cv2.VideoCapture(video_path)
-            buffer = deque(maxlen=self.config["SEQ_LEN"])
+            if not cap.isOpened():
+                st.error(f"❌ Failed to open video: {video_path}")
+                return None
+            
+            buffer = deque(maxlen=seq_len)
             prev_text = ""
             freeze_count = 0
+            
+            # Get video info
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            duration = total_frames / fps if fps > 0 else 0
+            
+            # Display video info
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Frames", total_frames)
+            with col2:
+                st.metric("FPS", f"{fps:.2f}")
+            with col3:
+                st.metric("Duration", f"{duration:.2f}s")
+            
+            # Create containers for dynamic updates
+            progress_placeholder = st.empty()
+            frame_placeholder = st.empty()
+            metrics_placeholder = st.empty()
+            results_container = st.container()
             
             # Results tracking
             results = {
@@ -1823,571 +1715,312 @@ class LipSyncAnalyzer:
                 'all_confidence': []
             }
             
-            # Progress tracking
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            metrics_placeholder = st.empty()
-            
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            
-            # Display video info
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Frames", total_frames)
-            with col2:
-                st.metric("FPS", f"{fps:.2f}")
-            with col3:
-                st.metric("Duration", f"{total_frames/fps:.2f}s")
-            
-            # Analysis loop
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            # Start analysis
+            with results_container:
+                st.markdown("### 📊 Real-time Analysis")
                 
-                results['frame_count'] += 1
-                current_frame = results['frame_count']
+                # Create progress bar
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                # Update progress
-                if total_frames > 0:
-                    progress = min(current_frame / total_frames, 1.0)
+                # Analysis loop
+                frame_idx = 0
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    frame_idx += 1
+                    results['frame_count'] = frame_idx
+                    
+                    # Update progress
+                    progress = min(frame_idx / total_frames, 1.0)
                     progress_bar.progress(progress)
-                    status_text.text(f"🔄 Processing frame {current_frame}/{total_frames}")
-                
-                # Extract mouth region
-                mouth = extract_mouth_frame(frame, self.config["IMG_SIZE"])
-                if mouth is None:
-                    continue
-                
-                mouth = mouth.astype("float32") / 255.0
-                buffer.append(mouth)
-                
-                # Process when buffer is full
-                if len(buffer) == self.config["SEQ_LEN"]:
-                    seq_np = np.stack(buffer)
-                    seq = torch.from_numpy(seq_np) \
-                               .unsqueeze(0) \
-                               .unsqueeze(2) \
-                               .float() \
-                               .to(self.device)
+                    status_text.text(f"🔄 Processing frame {frame_idx}/{total_frames}")
                     
-                    with torch.no_grad():
-                        logits = self.model(seq)
-                        probs = logits.softmax(dim=-1)[0]
-                        curr_text = self.greedy_decode(probs, self.idx_to_char)
+                    # Extract mouth region
+                    mouth = extract_mouth_frame(frame, self.config["IMG_SIZE"])
+                    if mouth is None:
+                        continue
                     
-                    # Calculate metrics
-                    drift = self.cer(curr_text, prev_text)
-                    confidence = probs.max(dim=1)[0].mean().item()
-                    lang_score = self.language_quality(curr_text)
+                    mouth = mouth.astype("float32") / 255.0
+                    buffer.append(mouth)
                     
-                    # Freeze detection
-                    if curr_text == prev_text and len(curr_text) > 5:
-                        freeze_count += 1
-                    else:
-                        freeze_count = 0
-                    
-                    # Make prediction
-                    if current_frame < self.config["SEQ_LEN"] * 3:
-                        prediction = "WARMUP"
-                    else:
-                        if (drift > cer_threshold or 
-                            confidence < conf_threshold or 
-                            lang_score < 2.5 or 
-                            freeze_count > freeze_limit):
-                            prediction = "FAKE"
-                            results['fake_count'] += 1
-                        else:
-                            prediction = "REAL"
-                            results['real_count'] += 1
+                    # Only process when buffer is full
+                    if len(buffer) == seq_len:
+                        seq_np = np.stack(buffer)
+                        seq = torch.from_numpy(seq_np) \
+                                   .unsqueeze(0) \
+                                   .unsqueeze(2) \
+                                   .float() \
+                                   .to(self.device)
                         
-                        results['total_decisions'] += 1
-                    
-                    # Store results
-                    results['all_predictions'].append(prediction)
-                    results['all_texts'].append(curr_text)
-                    results['all_cer'].append(drift)
-                    results['all_confidence'].append(confidence)
-                    prev_text = curr_text
-                
-                # Update metrics display periodically
-                if current_frame % 30 == 0:
-                    with metrics_placeholder.container():
-                        m1, m2, m3, m4 = st.columns(4)
-                        with m1:
-                            st.metric("Processed Frames", current_frame)
-                        with m2:
-                            fake_ratio = results['fake_count'] / max(results['total_decisions'], 1)
-                            st.metric("Fake Ratio", f"{fake_ratio:.2%}")
-                        with m3:
-                            st.metric("Text Changes", len(set(results['all_texts'])))
-                        with m4:
-                            if results['all_confidence']:
-                                avg_conf = np.mean(results['all_confidence'])
-                                st.metric("Avg Confidence", f"{avg_conf:.3f}")
+                        with torch.no_grad():
+                            logits = self.model(seq)
+                            probs = logits.softmax(dim=-1)[0]
+                            curr_text = greedy_decode(probs, self.idx_to_char)
+                        
+                        # Calculate metrics
+                        drift = cer(curr_text, prev_text)
+                        confidence = probs.max(dim=1)[0].mean().item()
+                        lang_score = language_quality(curr_text)
+                        
+                        # Freeze detection
+                        if curr_text == prev_text and len(curr_text) > 5:
+                            freeze_count += 1
+                        else:
+                            freeze_count = 0
+                        
+                        # Make prediction
+                        prediction = None
+                        if frame_idx < seq_len * 3:
+                            status = "WARMING UP"
+                            prediction = "WARMUP"
+                        else:
+                            if (drift > cer_threshold or 
+                                confidence < conf_threshold or 
+                                lang_score < 2.5 or 
+                                freeze_count > freeze_limit):
+                                status = "❌ FAKE FRAME"
+                                prediction = "FAKE"
+                                results['fake_count'] += 1
+                            else:
+                                status = "✅ REAL FRAME"
+                                prediction = "REAL"
+                                results['real_count'] += 1
+                            
+                            results['total_decisions'] += 1
+                        
+                        # Store results
+                        if prediction:
+                            results['all_predictions'].append(prediction)
+                            results['all_texts'].append(curr_text)
+                            results['all_cer'].append(drift)
+                            results['all_confidence'].append(confidence)
+                        
+                        prev_text = curr_text
+                        
+                        # Update display
+                        self._update_display(
+                            frame, frame_idx, curr_text, drift, confidence, 
+                            lang_score, status, frame_placeholder, metrics_placeholder
+                        )
             
+            # Clean up
             cap.release()
             progress_bar.progress(1.0)
             status_text.text("✅ Analysis complete!")
-        
-        # Step 3: Display results
-        with st.container():
-            st.markdown("### 📊 STEP 3: Analysis Results")
-            self.display_results(results, cer_threshold, conf_threshold, freeze_limit)
+            
+            # Display final results
+            self._display_final_results(results)
         
         # Save results
-        self.save_results(results, video_path)
+        report_path = self.save_results(results, video_path)
         
         return results
     
-    def display_results(self, results, cer_threshold, conf_threshold, freeze_limit):
-        """Display lip sync analysis results."""
+    def _update_display(self, frame, frame_idx, curr_text, drift, confidence, lang_score, status, frame_placeholder, metrics_placeholder):
+        """Update the display with current frame and metrics."""
+        # Convert frame to RGB for display
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        st.markdown("## 🎯 LIP SYNC ANALYSIS RESULTS")
-        st.markdown("---")
+        # Add overlay text
+        overlay = frame_rgb.copy()
+        y_offset = 40
+        cv2.putText(overlay, f"Frame: {frame_idx}", 
+                   (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 
+                   0.7, (255, 255, 255), 2)
         
-        # Summary metrics
-        col1, col2, col3, col4 = st.columns(4)
+        cv2.putText(overlay, f"Status: {status}", 
+                   (20, y_offset + 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                   0.7, (0, 255, 0) if "REAL" in status else (255, 0, 0) if "FAKE" in status else (255, 165, 0), 2)
         
-        with col1:
-            st.metric("Total Frames", results['frame_count'])
-        with col2:
+        if curr_text:
+            cv2.putText(overlay, f"Text: {curr_text[:20]}...", 
+                       (20, y_offset + 60), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.6, (255, 255, 255), 2)
+        
+        cv2.putText(overlay, f"CER Drift: {drift:.3f}", 
+                   (20, y_offset + 90), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.6, (255, 255, 255), 2)
+        
+        cv2.putText(overlay, f"Confidence: {confidence:.3f}", 
+                   (20, y_offset + 120), cv2.FONT_HERSHEY_SIMPLEX, 
+                   0.6, (255, 255, 255), 2)
+        
+        # Display frame
+        frame_placeholder.image(overlay, channels="RGB", caption=f"Frame {frame_idx}")
+        
+        # Display metrics
+        with metrics_placeholder.container():
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Status", status)
+            with col2:
+                st.metric("CER Drift", f"{drift:.3f}")
+            with col3:
+                st.metric("Confidence", f"{confidence:.3f}")
+            with col4:
+                st.metric("Language Score", f"{lang_score:.2f}")
+    
+    def _display_final_results(self, results):
+        """Display final analysis results."""
+        st.success("✅ Analysis Complete!")
+        
+        # Display results summary
+        st.markdown("## 📊 Results Summary")
+        
+        if results['total_decisions'] > 0:
+            # Calculate metrics
             total_decisions = results['total_decisions']
-            st.metric("Total Decisions", total_decisions)
-        with col3:
             real_count = results['real_count']
-            st.metric("REAL Count", real_count)
-        with col4:
             fake_count = results['fake_count']
-            st.metric("FAKE Count", fake_count)
-        
-        # Final verdict
-        st.markdown("---")
-        st.subheader("🎯 Final Verdict")
-        
-        if total_decisions > 0:
-            fake_ratio = fake_count / total_decisions
+            fake_ratio = fake_count / total_decisions if total_decisions > 0 else 0
             
-            if fake_ratio >= 0.50:
-                verdict = "❌ LIKELY FAKE"
-                verdict_color = "#FF6B6B"
-                verdict_explanation = "High probability of lip sync manipulation"
+            # Display metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Frames", results['frame_count'])
+            with col2:
+                st.metric("Total Decisions", total_decisions)
+            with col3:
+                st.metric("REAL Count", real_count)
+            with col4:
+                st.metric("FAKE Count", fake_count)
+            
+            # Create prediction chart
+            if results['all_predictions']:
+                st.markdown("### 📈 Prediction Timeline")
+                predictions_df = pd.DataFrame({
+                    'Sequence': range(len(results['all_predictions'])),
+                    'Prediction': [1 if p == "REAL" else 0 if p == "FAKE" else 0.5 for p in results['all_predictions']]
+                })
+                
+                fig = px.line(
+                    predictions_df, 
+                    x='Sequence', 
+                    y='Prediction',
+                    title='Real/Fake Predictions Over Time',
+                    labels={'Prediction': 'Prediction (1=Real, 0=Fake, 0.5=Warmup)'}
+                )
+                fig.update_traces(line=dict(color='blue', width=2))
+                fig.update_yaxes(range=[-0.1, 1.1])
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Final prediction based on 50% threshold
+            st.markdown("### 🎯 Final Assessment")
+            
+            if total_decisions == 0:
+                st.warning("⚠️ **INCONCLUSIVE** - Not enough decisions made")
+                final_verdict = "INCONCLUSIVE"
+            elif fake_ratio > 0.50:
+                st.error(f"❌ **FAKE VIDEO** - {fake_ratio*100:.1f}% of frames show lip sync issues (over 50%)")
+                final_verdict = "FAKE"
             elif fake_ratio >= 0.30:
-                verdict = "⚠️ SUSPICIOUS"
-                verdict_color = "#FFD166"
-                verdict_explanation = "Possible lip sync issues detected"
+                st.warning(f"⚠️ **SUSPICIOUS** - {fake_ratio*100:.1f}% of frames show potential lip sync issues")
+                final_verdict = "SUSPICIOUS"
             else:
-                verdict = "✅ LIKELY REAL"
-                verdict_color = "#06D6A0"
-                verdict_explanation = "Lip movements appear synchronized"
+                st.success(f"✅ **REAL VIDEO** - Only {fake_ratio*100:.1f}% of frames show lip sync issues")
+                final_verdict = "REAL"
             
+            # Display verdict
             st.markdown(f"""
-            <div style="background: {verdict_color}; padding: 1.5rem; border-radius: 10px; text-align: center; margin: 1rem 0;">
-                <h2 style="color: white; margin: 0;">{verdict}</h2>
-                <p style="color: white; margin: 0.5rem 0 0 0;">{verdict_explanation}</p>
-                <p style="color: white; margin: 0.5rem 0 0 0;">Fake Ratio: {fake_ratio:.2%}</p>
+            <div style="background: {'#FF6B6B' if final_verdict == 'FAKE' else '#FFD166' if final_verdict == 'SUSPICIOUS' else '#06D6A0' if final_verdict == 'REAL' else '#6C757D'}; 
+                        padding: 1.5rem; border-radius: 10px; text-align: center; margin: 1rem 0;">
+                <h2 style="color: white; margin: 0;">Final Verdict: {final_verdict}</h2>
+                <p style="color: white; margin: 0.5rem 0 0 0; font-size: 1.1rem;">
+                    Fake Frames: {fake_count}/{total_decisions} ({fake_ratio*100:.1f}%)
+                </p>
             </div>
             """, unsafe_allow_html=True)
-        
-        # Visualization
-        st.markdown("---")
-        st.subheader("📈 Analysis Visualizations")
-        
-        # Create visualizations
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Prediction distribution pie chart
-            import plotly.graph_objects as go
             
-            labels = ['REAL', 'FAKE']
-            if total_decisions - real_count - fake_count > 0:
-                labels.append('WARMUP')
+            # Return the verdict for use in combined analysis
+            results['final_verdict'] = final_verdict
+            results['fake_ratio'] = fake_ratio
             
-            values = [real_count, fake_count]
-            if total_decisions - real_count - fake_count > 0:
-                values.append(total_decisions - real_count - fake_count)
-            
-            fig_pie = go.Figure(data=[go.Pie(
-                labels=labels,
-                values=values,
-                hole=.3,
-                marker_colors=['#06D6A0', '#FF6B6B', '#FFD166'][:len(labels)]
-            )])
-            
-            fig_pie.update_layout(
-                title="Prediction Distribution",
-                height=400
-            )
-            
-            st.plotly_chart(fig_pie, use_container_width=True)
-        
-        with col2:
-            # Confidence over time
-            if results['all_confidence']:
-                fig_conf = go.Figure()
-                fig_conf.add_trace(go.Scatter(
-                    y=results['all_confidence'],
-                    mode='lines',
-                    name='Confidence',
-                    line=dict(color='blue', width=2)
-                ))
-                
-                # Add threshold line
-                fig_conf.add_hline(y=conf_threshold, line_dash="dash", 
-                                 line_color="red", annotation_text="Threshold")
-                
-                fig_conf.update_layout(
-                    title="Confidence Over Time",
-                    xaxis_title="Sequence",
-                    yaxis_title="Confidence",
-                    height=400
-                )
-                
-                st.plotly_chart(fig_conf, use_container_width=True)
-        
-        # Text predictions
-        st.markdown("---")
-        st.subheader("📝 Detected Text Predictions")
-        
-        unique_texts = list(dict.fromkeys([t for t in results['all_texts'] if t]))
-        if unique_texts:
-            text_cols = st.columns(min(2, len(unique_texts)))
-            for i, text in enumerate(unique_texts[:10]):  # Show first 10 unique texts
-                with text_cols[i % 2]:
-                    st.info(f"**Sequence {i+1}:** {text}")
         else:
-            st.warning("No text predictions were generated")
-        
-        # Threshold information
-        st.markdown("---")
-        st.subheader("⚙️ Analysis Parameters")
-        
-        param_col1, param_col2, param_col3 = st.columns(3)
-        with param_col1:
-            st.metric("CER Threshold", f"{cer_threshold:.2f}")
-        with param_col2:
-            st.metric("Confidence Threshold", f"{conf_threshold:.2f}")
-        with param_col3:
-            st.metric("Freeze Limit", freeze_limit)
+            st.warning("⚠️ No decisions were made during analysis.")
+            results['final_verdict'] = "INCONCLUSIVE"
+            results['fake_ratio'] = 0
     
     def save_results(self, results, video_path):
         """Save lip sync analysis results."""
+        fake_ratio = (results['fake_count'] / results['total_decisions'] * 100) if results['total_decisions'] > 0 else 0
+        
+        # Determine final verdict based on 50% threshold
+        if results['total_decisions'] == 0:
+            final_verdict = "INCONCLUSIVE"
+        elif fake_ratio > 50:
+            final_verdict = "FAKE"
+        elif fake_ratio >= 30:
+            final_verdict = "SUSPICIOUS"
+        else:
+            final_verdict = "REAL"
+        
         report = {
             'video_path': video_path,
             'analysis_timestamp': str(np.datetime64('now')),
             'analysis_mode': 'Lip Sync Analysis',
-            'results': results
+            'config': {
+                'cer_threshold': self.config["CER_THRESHOLD"],
+                'conf_threshold': self.config["CONF_THRESHOLD"],
+                'freeze_limit': self.config["FREEZE_LIMIT"]
+            },
+            'results_summary': {
+                'total_frames': results['frame_count'],
+                'total_decisions': results['total_decisions'],
+                'real_count': results['real_count'],
+                'fake_count': results['fake_count'],
+                'fake_percentage': fake_ratio,
+                'final_verdict': final_verdict,
+                'verdict_criteria': 'FAKE if > 50% fake frames',
+                'avg_cer': float(np.mean(results['all_cer'])) if results['all_cer'] else 0,
+                'avg_confidence': float(np.mean(results['all_confidence'])) if results['all_confidence'] else 0
+            },
+            'detailed_results': results
         }
         
         # Save report
         report_path = os.path.join(
             self.results_dir, 
-            f"lip_sync_{os.path.basename(video_path)}.json"
+            f"lip_sync_{os.path.basename(video_path)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         )
         
         try:
             with open(report_path, 'w') as f:
                 json.dump(report, f, indent=2, cls=NumpyEncoder)
             st.success(f"✅ Lip sync report saved: {report_path}")
+            
+            # Create download button
+            with open(report_path, 'r') as f:
+                report_data = f.read()
+            
+            st.download_button(
+                label="📥 Download Lip Sync Report",
+                data=report_data,
+                file_name=os.path.basename(report_path),
+                mime="application/json"
+            )
+            
         except Exception as e:
             st.error(f"❌ Error saving report: {e}")
         
         return report_path
 
 # =============================================================================
-# COMPLETE ANALYSIS PIPELINE WITH DETAILED METADATA AT BOTTOM
-# =============================================================================
-
-class CompleteVideoAnalyzer:
-    """Complete video analysis with detailed metadata shown at bottom."""
-    
-    def __init__(self):
-        self.frame_extractor = FrameExtractor()
-        self.face_detector = RetinaFaceDetector()
-        self.metadata_analyzer = MetadataAnalyzer()
-        self.forensic_analyzer = CompleteForensicMetadataAnalyzer()
-        self.results_dir = "complete_analysis_results"
-        os.makedirs(self.results_dir, exist_ok=True)
-    
-    def analyze_video(self, video_path, frames_per_second=1, baseline_name=None):
-        """Complete video analysis with deepfake detection and detailed metadata."""
-        # Main header
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; margin-bottom: 2rem;">
-            <h1 style="color: white; text-align: center; margin: 0; font-size: 2.5rem;">🔬 Complete Video Analysis</h1>
-            <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1.2rem;">Deepfake Detection + Detailed Metadata Analysis</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Store all results for final display
-        all_results = {
-            "deepfake_analysis": None,
-            "metadata_analysis": None,
-            "forensic_analysis": None
-        }
-        
-        # Step 1: Frame Extraction
-        with st.container():
-            st.markdown("### 🎬 STEP 1: Frame Extraction")
-            frames = self.frame_extractor.extract_frames(video_path, frames_per_second)
-            if not frames:
-                st.error("❌ No frames extracted. Exiting.")
-                return None
-        
-        # Step 2: Face Detection
-        with st.container():
-            st.markdown("### 👤 STEP 2: Face Detection")
-            faces = self.face_detector.detect_and_extract_faces(frames)
-            if not faces:
-                st.error("❌ No faces detected. Exiting.")
-                return None
-        
-        # Step 3: Initialize Deepfake_Models
-        with st.container():
-            st.markdown("### 🤖 STEP 3: Loading Deepfake_Models")
-            available_models = {}
-            for model_name, model_path in MODEL_PATHS.items():
-                if os.path.exists(model_path):
-                    available_models[model_name] = model_path
-            
-            if not available_models:
-                st.error("❌ No model files found!")
-                return None
-            
-            model_status = st.status("🔄 **Loading models...**", expanded=True)
-            detectors = {}
-            
-            for model_name, model_path in available_models.items():
-                with model_status:
-                    st.write(f"📦 Loading {model_name}...")
-                    detector = DeepFakeDetector(model_path, model_name)
-                    if detector.model is not None:
-                        detectors[model_name] = detector
-                        st.success(f"✅ {model_name} loaded successfully")
-                    else:
-                        st.error(f"❌ Failed to load {model_name}")
-            
-            model_status.update(label=f"✅ **Models Loaded** - {len(detectors)} models ready", state="complete")
-        
-        # Step 4: Deepfake Analysis
-        with st.container():
-            st.markdown("### 🧪 STEP 4: Deepfake Analysis")
-            all_predictions = {}
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for i, (model_name, detector) in enumerate(detectors.items()):
-                status_text.text(f"🧪 Analyzing with {model_name}...")
-                predictions = detector.predict_multiple_faces(faces)
-                all_predictions[model_name] = predictions
-                
-                progress = float((i + 1) / len(detectors))
-                progress_bar.progress(progress)
-            
-            status_text.text("✅ All models completed analysis")
-            
-            # Generate deepfake report
-            deepfake_report = self.generate_deepfake_report(all_predictions, video_path)
-            all_results["deepfake_analysis"] = deepfake_report
-        
-        # Step 5: Basic Metadata Analysis
-        with st.container():
-            st.markdown("### 📋 STEP 5: Basic Metadata Analysis")
-            metadata_report = self.metadata_analyzer.create_metadata_report(video_path, baseline_name)
-            if metadata_report:
-                all_results["metadata_analysis"] = metadata_report
-                st.success("✅ Metadata analysis complete")
-            else:
-                st.warning("⚠️ Metadata analysis incomplete")
-        
-        # Step 6: Complete Forensic Metadata Analysis
-        with st.container():
-            st.markdown("### 🔍 STEP 6: Complete Forensic Metadata Analysis")
-            forensic_report = self.forensic_analyzer.analyze_video(video_path)
-            if forensic_report:
-                all_results["forensic_analysis"] = forensic_report
-                st.success("✅ Forensic analysis complete")
-            else:
-                st.warning("⚠️ Forensic analysis incomplete")
-        
-        # Step 7: Display Complete Results
-        with st.container():
-            st.markdown("### 📊 STEP 7: Complete Analysis Results")
-            self.display_complete_results(all_results, video_path)
-        
-        return all_results
-    
-    def generate_deepfake_report(self, all_predictions, video_path):
-        """Generate deepfake analysis report."""
-        model_reports = {}
-        
-        for model_name, predictions in all_predictions.items():
-            if not predictions:
-                continue
-                
-            total_faces = len(predictions)
-            fake_faces = sum(1 for pred in predictions if pred['prediction'] == 'FAKE')
-            real_faces = total_faces - fake_faces
-            
-            fake_confidence_avg = float(np.mean([pred['confidence'] for pred in predictions if pred['prediction'] == 'FAKE'])) if fake_faces > 0 else 0.0
-            real_confidence_avg = float(np.mean([pred['confidence'] for pred in predictions if pred['prediction'] == 'REAL'])) if real_faces > 0 else 0.0
-            
-            model_reports[model_name] = {
-                'total_faces_analyzed': int(total_faces),
-                'fake_faces_detected': int(fake_faces),
-                'real_faces_detected': int(real_faces),
-                'fake_percentage': float((fake_faces / total_faces * 100) if total_faces > 0 else 0),
-                'average_fake_confidence': float(fake_confidence_avg),
-                'average_real_confidence': float(real_confidence_avg),
-                'overall_verdict': "LIKELY FAKE" if fake_faces > real_faces else "LIKELY REAL",
-                'confidence_score': float(max(fake_confidence_avg, real_confidence_avg))
-            }
-        
-        # Calculate ensemble results
-        if model_reports:
-            fake_percentages = [report['fake_percentage'] for report in model_reports.values()]
-            ensemble_fake_percentage = np.mean(fake_percentages) if fake_percentages else 0
-            
-            model_reports['ENSEMBLE'] = {
-                'fake_percentage': float(ensemble_fake_percentage),
-                'overall_verdict': "LIKELY FAKE" if ensemble_fake_percentage > 50 else "LIKELY REAL",
-                'confidence_score': float(np.mean([r['confidence_score'] for r in model_reports.values()]))
-            }
-        
-        report = {
-            'video_path': video_path,
-            'analysis_timestamp': str(np.datetime64('now')),
-            'models_used': list(all_predictions.keys()),
-            'model_reports': model_reports,
-            'ensemble_report': model_reports.get('ENSEMBLE', {})
-        }
-        
-        return report
-    
-    def display_complete_results(self, all_results, video_path):
-        """Display all analysis results with metadata at bottom."""
-        
-        # ============================================
-        # SECTION 1: DEEPFAKE ANALYSIS RESULTS (Top)
-        # ============================================
-        st.markdown("## 🎯 DEEPFAKE ANALYSIS RESULTS")
-        st.markdown("---")
-        
-        deepfake_report = all_results.get("deepfake_analysis")
-        if deepfake_report:
-            ensemble_report = deepfake_report.get('ensemble_report', {})
-            
-            # Create metrics dashboard
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("🤖 Models Used", len(deepfake_report.get('models_used', [])))
-            with col2:
-                st.metric("👥 Total Faces", sum([r.get('total_faces_analyzed', 0) for r in deepfake_report.get('model_reports', {}).values()]))
-            with col3:
-                fake_percentage = ensemble_report.get('fake_percentage', 0)
-                st.metric("🎭 Fake %", f"{fake_percentage:.1f}%")
-            with col4:
-                verdict = ensemble_report.get('overall_verdict', 'UNKNOWN')
-                verdict_color = "#FF6B6B" if verdict == "LIKELY FAKE" else "#4ECDC4"
-                st.markdown(f"""
-                <div style="background: {verdict_color}; padding: 0.5rem; border-radius: 10px; text-align: center;">
-                    <h4 style="color: white; margin: 0;">Verdict: {verdict}</h4>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Model comparison chart
-            model_names = []
-            fake_percentages = []
-            
-            for model_name, model_report in deepfake_report.get('model_reports', {}).items():
-                if model_name != 'ENSEMBLE':
-                    model_names.append(model_name)
-                    fake_percentages.append(model_report.get('fake_percentage', 0))
-            
-            if model_names:
-                comparison_data = pd.DataFrame({
-                    'Model': model_names,
-                    'Fake Percentage': fake_percentages
-                })
-                
-                fig_comparison = px.bar(
-                    comparison_data,
-                    x='Model',
-                    y='Fake Percentage',
-                    title='Deepfake Detection by Model',
-                    color='Fake Percentage',
-                    color_continuous_scale='RdYlGn_r'
-                )
-                fig_comparison.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig_comparison, use_container_width=True)
-        
-        # ============================================
-        # SECTION 2: COMPLETE METADATA ANALYSIS (Bottom)
-        # ============================================
-        st.markdown("## 🔬 COMPLETE METADATA & FORENSIC ANALYSIS")
-        st.markdown("=" * 70)
-        
-        forensic_report = all_results.get("forensic_analysis")
-        if forensic_report:
-            self.forensic_analyzer.display_detailed_forensic_report(forensic_report, video_path)
-        
-        # ============================================
-        # SECTION 3: COMBINED RISK ASSESSMENT
-        # ============================================
-        st.markdown("## 🚨 COMBINED RISK ASSESSMENT")
-        st.markdown("---")
-        
-        # Calculate combined risk
-        forensic_risk = 0
-        forensic_verdict = "UNKNOWN"
-        if forensic_report and forensic_report.get("forensic_summary"):
-            forensic_risk = forensic_report["forensic_summary"].get("risk_score", 0)
-            forensic_verdict = forensic_report["forensic_summary"].get("verdict", "UNKNOWN")
-        
-        deepfake_risk_score = ensemble_report.get('fake_percentage', 0) / 100 if ensemble_report else 0
-        deepfake_risk = "HIGH" if deepfake_risk_score > 0.5 else "MEDIUM" if deepfake_risk_score > 0.25 else "LOW"
-        
-        # Combined risk calculation
-        combined_risk_score = (forensic_risk * 0.6) + (deepfake_risk_score * 0.4)
-        if combined_risk_score > 0.7:
-            overall_risk = "HIGH"
-            risk_color = "#FF6B6B"
-        elif combined_risk_score > 0.4:
-            overall_risk = "MEDIUM"
-            risk_color = "#FFD166"
-        else:
-            overall_risk = "LOW"
-            risk_color = "#06D6A0"
-        
-        # Display combined risk
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.info(f"**Forensic Risk:** {forensic_verdict}")
-        
-        with col2:
-            st.info(f"**Deepfake Risk:** {deepfake_risk}")
-        
-        with col3:
-            st.markdown(f"""
-            <div style="background: {risk_color}; padding: 1rem; border-radius: 10px; text-align: center;">
-                <h3 style="color: white; margin: 0;">Overall Risk: {overall_risk}</h3>
-            </div>
-            """, unsafe_allow_html=True)
-
-
-# =============================================================================
-# HELPER FUNCTIONS FOR METADATA ANALYSIS
+# METADATA ANALYSIS PIPELINE
 # =============================================================================
 
 def run_metadata_analysis(video_path, baseline_name=None):
     """Run metadata analysis and display results."""
-    st.markdown("---")
-    st.markdown("### 🔍 Performing Metadata Analysis...")
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; margin-bottom: 2rem;">
+        <h1 style="color: white; text-align: center; margin: 0; font-size: 2.5rem;">🔬 Metadata Analysis</h1>
+        <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1.2rem;">Complete Forensic Metadata Analysis</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("### 🔍 Performing Forensic Metadata Analysis...")
     
     # Initialize analyzers
     metadata_analyzer = MetadataAnalyzer()
@@ -2414,33 +2047,17 @@ def run_metadata_analysis(video_path, baseline_name=None):
         st.markdown("### 📊 Forensic Metadata Results")
         forensic_analyzer.display_detailed_forensic_report(forensic_report, video_path)
     
-    return {
-        "metadata_report": metadata_report,
-        "forensic_report": forensic_report
-    }
-
-def run_metadata_only_analysis(video_path, baseline_name=None):
-    """Run metadata analysis only (no deepfake detection)."""
-    st.markdown("""
-    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; margin-bottom: 2rem;">
-        <h1 style="color: white; text-align: center; margin: 0; font-size: 2.5rem;">🔬 Metadata Analysis Only</h1>
-        <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1.2rem;">Comprehensive Forensic Metadata Analysis</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Run metadata analysis
-    metadata_results = run_metadata_analysis(video_path, baseline_name)
-    
     # Create comprehensive report
     report = {
         "video_path": video_path,
         "analysis_timestamp": str(np.datetime64('now')),
-        "analysis_mode": "Metadata Analysis Only",
-        "metadata_results": metadata_results
+        "analysis_mode": "Metadata Analysis",
+        "metadata_report": metadata_report,
+        "forensic_report": forensic_report
     }
     
     # Save report
-    report_path = f"metadata_only_{os.path.basename(video_path)}.json"
+    report_path = f"metadata_{os.path.basename(video_path)}.json"
     try:
         with open(report_path, 'w') as f:
             json.dump(report, f, indent=2, cls=NumpyEncoder)
@@ -2450,16 +2067,201 @@ def run_metadata_only_analysis(video_path, baseline_name=None):
     
     return report
 
+# =============================================================================
+# COMPLETE ANALYSIS PIPELINE
+# =============================================================================
+
+class CompleteVideoAnalyzer:
+    """Complete video analysis with all three methods."""
+    
+    def __init__(self):
+        self.deepfake_pipeline = DeepfakeAnalysisPipeline()
+        self.lip_sync_analyzer = LipSyncAnalyzer()
+        self.forensic_analyzer = CompleteForensicMetadataAnalyzer()
+        self.metadata_analyzer = MetadataAnalyzer()
+        self.results_dir = "complete_analysis_results"
+        os.makedirs(self.results_dir, exist_ok=True)
+    
+    def analyze_video(self, video_path, frames_per_second=1, baseline_name=None):
+        """Complete video analysis with all three methods."""
+        # Main header
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; margin-bottom: 2rem;">
+            <h1 style="color: white; text-align: center; margin: 0; font-size: 2.5rem;">🔬 Complete Video Analysis</h1>
+            <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1.2rem;">Deepfake Detection + Lip Sync + Metadata Analysis</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Store all results
+        all_results = {}
+        
+        # 1. Deepfake Analysis
+        st.markdown("## 🤖 PART 1: Deepfake Detection")
+        deepfake_report = self.deepfake_pipeline.analyze_video(video_path, frames_per_second)
+        all_results["deepfake"] = deepfake_report
+        
+        st.markdown("---")
+        
+        # 2. Lip Sync Analysis
+        st.markdown("## 👄 PART 2: Lip Sync Analysis")
+        lip_sync_report = self.lip_sync_analyzer.analyze_video(video_path)
+        all_results["lip_sync"] = lip_sync_report
+        
+        st.markdown("---")
+        
+        # 3. Metadata Analysis
+        st.markdown("## 🔍 PART 3: Metadata Analysis")
+        metadata_report = run_metadata_analysis(video_path, baseline_name)
+        all_results["metadata"] = metadata_report
+        
+        # 4. Combined Assessment
+        self.display_combined_assessment(all_results, video_path)
+        
+        return all_results
+    
+    def display_combined_assessment(self, all_results, video_path):
+        """Display combined assessment from all three methods."""
+        st.markdown("## 🚨 COMBINED RISK ASSESSMENT")
+        st.markdown("---")
+        
+        # Extract verdicts from each analysis
+        deepfake_verdict = all_results.get("deepfake", {}).get("results_summary", {}).get("final_verdict", "UNKNOWN")
+        deepfake_fake_pct = all_results.get("deepfake", {}).get("results_summary", {}).get("fake_percentage", 0)
+        
+        lip_sync_verdict = all_results.get("lip_sync", {}).get("results_summary", {}).get("final_verdict", "UNKNOWN")
+        lip_sync_fake_pct = all_results.get("lip_sync", {}).get("results_summary", {}).get("fake_percentage", 0)
+        
+        # Get forensic risk from metadata
+        forensic_risk = 0
+        if all_results.get("metadata", {}).get("forensic_report", {}).get("forensic_summary"):
+            forensic_risk = all_results["metadata"]["forensic_report"]["forensic_summary"].get("risk_score", 0)
+            forensic_verdict = all_results["metadata"]["forensic_report"]["forensic_summary"].get("verdict", "UNKNOWN")
+        
+        # Display individual verdicts
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if deepfake_verdict == "LIKELY FAKE":
+                st.error(f"**Deepfake:** {deepfake_verdict}")
+                st.metric("Fake %", f"{deepfake_fake_pct:.1f}%")
+            else:
+                st.success(f"**Deepfake:** {deepfake_verdict}")
+                st.metric("Fake %", f"{deepfake_fake_pct:.1f}%")
+        
+        with col2:
+            if lip_sync_verdict == "FAKE":
+                st.error(f"**Lip Sync:** {lip_sync_verdict}")
+                st.metric("Fake %", f"{lip_sync_fake_pct:.1f}%")
+            elif lip_sync_verdict == "SUSPICIOUS":
+                st.warning(f"**Lip Sync:** {lip_sync_verdict}")
+                st.metric("Fake %", f"{lip_sync_fake_pct:.1f}%")
+            else:
+                st.success(f"**Lip Sync:** {lip_sync_verdict}")
+                st.metric("Fake %", f"{lip_sync_fake_pct:.1f}%")
+        
+        with col3:
+            if forensic_risk >= 3:
+                st.error(f"**Metadata:** HIGH risk")
+                st.metric("Risk Score", forensic_risk)
+            elif forensic_risk >= 1:
+                st.warning(f"**Metadata:** MEDIUM risk")
+                st.metric("Risk Score", forensic_risk)
+            else:
+                st.success(f"**Metadata:** LOW risk")
+                st.metric("Risk Score", forensic_risk)
+        
+        # Calculate overall risk
+        overall_risk = self.calculate_overall_risk(
+            deepfake_fake_pct, 
+            lip_sync_fake_pct, 
+            forensic_risk
+        )
+        
+        # Display final overall verdict
+        st.markdown("### 🎯 FINAL OVERALL VERDICT")
+        
+        if overall_risk >= 0.7:
+            final_verdict = "HIGH RISK - LIKELY DEEPFAKE"
+            verdict_color = "#FF6B6B"
+            icon = "❌"
+        elif overall_risk >= 0.4:
+            final_verdict = "MODERATE RISK - SUSPICIOUS"
+            verdict_color = "#FFD166"
+            icon = "⚠️"
+        else:
+            final_verdict = "LOW RISK - LIKELY AUTHENTIC"
+            verdict_color = "#06D6A0"
+            icon = "✅"
+        
+        st.markdown(f"""
+        <div style="background: {verdict_color}; padding: 1.5rem; border-radius: 10px; text-align: center; margin: 1rem 0;">
+            <h2 style="color: white; margin: 0;">{icon} {final_verdict}</h2>
+            <p style="color: white; margin: 0.5rem 0 0 0; font-size: 1.1rem;">
+                Overall Risk Score: {overall_risk:.2f}/1.00
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Save complete report
+        report = {
+            "video_path": video_path,
+            "analysis_timestamp": str(np.datetime64('now')),
+            "analysis_mode": "Complete Analysis",
+            "deepfake_analysis": all_results.get("deepfake", {}),
+            "lip_sync_analysis": all_results.get("lip_sync", {}),
+            "metadata_analysis": all_results.get("metadata", {}),
+            "combined_assessment": {
+                "overall_risk_score": overall_risk,
+                "final_verdict": final_verdict,
+                "individual_verdicts": {
+                    "deepfake": deepfake_verdict,
+                    "lip_sync": lip_sync_verdict,
+                    "metadata_risk": forensic_risk
+                }
+            }
+        }
+        
+        report_path = os.path.join(
+            self.results_dir, 
+            f"complete_{os.path.basename(video_path)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        )
+        
+        try:
+            with open(report_path, 'w') as f:
+                json.dump(report, f, indent=2, cls=NumpyEncoder)
+            st.success(f"✅ Complete report saved: {report_path}")
+        except Exception as e:
+            st.error(f"❌ Error saving report: {e}")
+    
+    def calculate_overall_risk(self, deepfake_fake_pct, lip_sync_fake_pct, forensic_risk):
+        """Calculate overall risk score from all three analyses."""
+        # Normalize forensic risk (0-3 scale to 0-1 scale)
+        forensic_normalized = min(forensic_risk / 3.0, 1.0)
+        
+        # Normalize deepfake fake percentage (0-100 to 0-1)
+        deepfake_normalized = deepfake_fake_pct / 100.0
+        
+        # Normalize lip sync fake percentage (0-100 to 0-1)
+        lip_sync_normalized = lip_sync_fake_pct / 100.0
+        
+        # Weighted combination (adjust weights as needed)
+        overall_risk = (
+            deepfake_normalized * 0.40 +      # Deepfake detection is most important
+            lip_sync_normalized * 0.35 +      # Lip sync is also important
+            forensic_normalized * 0.25        # Metadata provides supporting evidence
+        )
+        
+        return min(overall_risk, 1.0)  # Cap at 1.0
 
 # =============================================================================
-# MODIFIED STREAMLIT APPLICATION WITH METADATA IN ALL MODES
+# STREAMLIT APPLICATION
 # =============================================================================
 
 def main():
     """Main Streamlit application."""
     # Configure page
     st.set_page_config(
-        page_title="Complete Video Authenticity Analyzer",
+        page_title="Video Authenticity Analyzer",
         page_icon="🔬",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -2493,153 +2295,56 @@ def main():
         transform: translateY(-2px);
         box-shadow: 0 5px 15px rgba(0,0,0,0.3);
     }
-    .section-header {
+    .mode-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin: 0.5rem 0;
+        text-align: center;
+    }
+    .ensemble-info {
+        background: linear-gradient(135deg, #4ECDC4 0%, #44A08D 100%);
         color: white;
         padding: 1rem;
         border-radius: 10px;
         margin: 1rem 0;
     }
-    .forensic-box {
-        background-color: #f8f9fa;
-        border-left: 4px solid #6c757d;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        border-radius: 0 5px 5px 0;
-    }
-    .forensic-alert {
-        background-color: #fff3cd;
-        border-left: 4px solid #ffc107;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        border-radius: 0 5px 5px 0;
-    }
-    .forensic-danger {
-        background-color: #f8d7da;
-        border-left: 4px solid #dc3545;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        border-radius: 0 5px 5px 0;
-    }
-    .forensic-success {
-        background-color: #d1e7dd;
-        border-left: 4px solid #198754;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        border-radius: 0 5px 5px 0;
-    }
     </style>
     """, unsafe_allow_html=True)
     
     # Header
-    st.markdown('<h1 class="main-header">🔬 Complete Video Authenticity Analyzer</h1>', unsafe_allow_html=True)
-    st.markdown('<p style="text-align: center; color: #666; font-size: 1.2rem; margin-bottom: 2rem;">Deepfake Detection + Complete Forensic Metadata Analysis</p>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🔬 Video Authenticity Analyzer</h1>', unsafe_allow_html=True)
+    st.markdown('<p style="text-align: center; color: #666; font-size: 1.2rem; margin-bottom: 2rem;">Weighted Ensemble Deepfake Detection + Lip Sync + Metadata Analysis</p>', unsafe_allow_html=True)
     
-    # Navigation
     # Navigation
     analysis_mode = st.sidebar.selectbox(
         "🎯 Select Analysis Mode",
         [
-            "Single Model Analysis", 
-            "Multi-Model Ensemble Analysis", 
-            "Complete Analysis with Detailed Metadata",
-            "Lip Sync Analysis",  # Add this line
-            "Metadata Analysis Only"
+            "Deepfake Detection", 
+            "Lip Sync Analysis", 
+            "Metadata Analysis",
+            "Complete Analysis"
         ]
     )
     
     # Sidebar configuration
     with st.sidebar:
         st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                    padding: 1rem; border-radius: 10px; margin-bottom: 2rem;">
-            <h3 style="color: white; text-align: center; margin: 0;">🔧 Configuration</h3>
+        <div class="ensemble-info">
+            <h4>🤖 Weighted Ensemble</h4>
+            <p style="margin: 0; font-size: 0.9rem;">
+                <strong>Celeb 2.5:</strong> 50%<br>
+                <strong>Xception L2:</strong> 30%<br>
+                <strong>New DF E10:</strong> 20%<br>
+                <strong>Safety:</strong> Xception Deployment
+            </p>
         </div>
         """, unsafe_allow_html=True)
         
-        # Get available models
-        available_models = {}
-        for model_name, model_path in MODEL_PATHS.items():
-            if os.path.exists(model_path):
-                available_models[model_name] = model_path
-        
-        if not available_models and analysis_mode != "Metadata Analysis Only" and analysis_mode != "Lip Sync Analysis":
-            st.error("❌ No model files found!")
-            st.stop()
-        
-        # Model selection based on mode
-        if analysis_mode == "Single Model Analysis":
-            st.markdown("### 🤖 Model Selection")
-            selected_model_name = st.selectbox(
-                "Choose a model:",
-                options=list(available_models.keys()),
-                help="Select a single model for analysis",
-                key="single_model_select"
-            )
-            selected_models = {selected_model_name: available_models[selected_model_name]}
-        
-        elif analysis_mode == "Multi-Model Ensemble Analysis":
-            st.markdown("### 🤖 Model Selection")
-            selected_model_names = st.multiselect(
-                "Choose models for ensemble:",
-                options=list(available_models.keys()),
-                default=list(available_models.keys())[:min(3, len(available_models))],
-                help="Select multiple models for ensemble analysis",
-                key="multi_model_select"
-            )
-            selected_models = {name: available_models[name] for name in selected_model_names}
-        
-        elif analysis_mode == "Complete Analysis with Detailed Metadata":
-            st.markdown("### 🤖 Model Selection")
-            st.info("All available models will be used for complete analysis")
-            selected_models = available_models
-        
-        elif analysis_mode == "Lip Sync Analysis":
-            st.markdown("### 👄 Lip Sync Analysis")
-            st.info("Audio-visual synchronization verification")
-            selected_models = {}  # No deepfake_models needed for lip sync
-        else:  # Metadata Analysis Only
-            st.markdown("### 🔍 Metadata Analysis Only")
-            st.info("No deepfake_models will be loaded - only metadata analysis will be performed")
-            selected_models = {}
-        
-        # Analysis parameters - add lip sync parameters here
         st.markdown("### ⚙️ Analysis Parameters")
         
-        if analysis_mode == "Lip Sync Analysis":
-            # Lip sync specific parameters
-            cer_threshold = st.slider(
-                "CER Threshold",
-                min_value=0.1,
-                max_value=0.8,
-                value=0.35,
-                step=0.05,
-                help="Character Error Rate threshold for detecting anomalies"
-            )
-            
-            conf_threshold = st.slider(
-                "Confidence Threshold",
-                min_value=0.1,
-                max_value=0.9,
-                value=0.45,
-                step=0.05,
-                help="Minimum confidence for REAL classification"
-            )
-            
-            freeze_limit = st.slider(
-                "Freeze Limit",
-                min_value=5,
-                max_value=50,
-                value=10,
-                step=1,
-                help="Frames with same text before flagging as FAKE"
-            )
-            
-            # Set default values for other parameters
-            frames_per_second = 1
-            confidence_threshold = 0.9
-        
-        elif analysis_mode != "Metadata Analysis Only":
+        if analysis_mode == "Deepfake Detection":
             frames_per_second = st.slider(
                 "Frames per second:",
                 min_value=1,
@@ -2656,38 +2361,60 @@ def main():
                 step=0.05,
                 help="Minimum confidence score for face detection"
             )
-            
-            # Default values for lip sync parameters
-            cer_threshold = None
-            conf_threshold = None
-            freeze_limit = None
-        else:
-            # Default values for metadata-only mode
-            frames_per_second = 1
-            confidence_threshold = 0.9
-            cer_threshold = None
-            conf_threshold = None
-            freeze_limit = None
         
-        # Baseline selection for any mode with metadata
-        baseline_name = None
-        if analysis_mode in ["Complete Analysis with Detailed Metadata", "Metadata Analysis Only"]:
+        elif analysis_mode == "Lip Sync Analysis":
+            cer_threshold = st.slider(
+                "CER Threshold",
+                min_value=0.1,
+                max_value=0.8,
+                value=0.35,
+                step=0.05,
+                help="Character Error Rate threshold for detecting anomalies"
+            )
+            
+            conf_threshold = st.slider(
+                "Confidence Threshold",
+                min_value=0.1,
+                max_value=0.9,
+                value=0.45,
+                step=0.05,
+                help="Minimum confidence required for REAL classification"
+            )
+            
+            freeze_limit = st.slider(
+                "Freeze Limit",
+                min_value=5,
+                max_value=50,
+                value=10,
+                step=1,
+                help="Number of frames with same text before flagging as FAKE"
+            )
+        
+        elif analysis_mode in ["Metadata Analysis", "Complete Analysis"]:
+            # Baseline selection for metadata modes
             metadata_analyzer = MetadataAnalyzer()
             available_baselines = metadata_analyzer.get_available_baselines()
+            baseline_name = None
             if available_baselines:
                 baseline_name = st.selectbox(
                     "Select Baseline (Optional)",
                     [""] + available_baselines,
                     help="Compare against a pre-built metadata baseline"
                 )
+            
+            if analysis_mode == "Complete Analysis":
+                frames_per_second = st.slider(
+                    "Frames per second:",
+                    min_value=1,
+                    max_value=10,
+                    value=2,
+                    help="Higher values provide more detailed analysis"
+                )
         
         # System info
         st.markdown("### 📊 System Information")
         st.info(f"**Device:** {'🚀 GPU' if torch.cuda.is_available() else '💻 CPU'}")
-        if analysis_mode not in ["Metadata Analysis Only", "Lip Sync Analysis"]:
-            st.info(f"**Available Models:** {len(available_models)}")
-            if analysis_mode not in ["Complete Analysis with Detailed Metadata", "Lip Sync Analysis"]:
-                st.info(f"**Selected Models:** {len(selected_models)}")
+        
         # Check ffprobe availability
         try:
             subprocess.check_output(["ffprobe", "-version"])
@@ -2717,73 +2444,38 @@ def main():
             st.video(uploaded_file)
         with col2:
             mode_info = {
-                "Single Model Analysis": f"Single Model",
-                "Multi-Model Ensemble Analysis": f"{len(selected_models)} Models",
-                "Complete Analysis with Detailed Metadata": "All Models + Metadata",
-                "Lip Sync Analysis": "Lip Sync Detection",
-                "Metadata Analysis Only": "Metadata Only"
+                "Deepfake Detection": "Weighted Ensemble Analysis",
+                "Lip Sync Analysis": "Audio-Visual Synchronization",
+                "Metadata Analysis": "Forensic Metadata Analysis",
+                "Complete Analysis": "All Three Methods"
             }
             st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); 
-                        padding: 1.5rem; border-radius: 10px;">
-                <h4 style="color: white; margin: 0 0 1rem 0;">📹 Video Details</h4>
-                <p style="color: white; margin: 0.5rem 0;"><strong>File:</strong> {uploaded_file.name[:30]}{'...' if len(uploaded_file.name) > 30 else ''}</p>
-                <p style="color: white; margin: 0.5rem 0;"><strong>Size:</strong> {uploaded_file.size / (1024*1024):.2f} MB</p>
-                <p style="color: white; margin: 0.5rem 0;"><strong>Mode:</strong> {analysis_mode}</p>
-                <p style="color: white; margin: 0.5rem 0;"><strong>Analysis:</strong> {mode_info.get(analysis_mode, 'Custom')}</p>
-                <p style="color: white; margin: 0.5rem 0;"><strong>Forensic:</strong> {'✅ Enabled' if analysis_mode in ['Complete Analysis with Detailed Metadata', 'Metadata Analysis Only'] else '✅ Light'}</p>
+            <div class="mode-card">
+                <h4 style="margin: 0 0 1rem 0;">📹 Video Details</h4>
+                <p style="margin: 0.5rem 0;"><strong>File:</strong> {uploaded_file.name[:30]}{'...' if len(uploaded_file.name) > 30 else ''}</p>
+                <p style="margin: 0.5rem 0;"><strong>Size:</strong> {uploaded_file.size / (1024*1024):.2f} MB</p>
+                <p style="margin: 0.5rem 0;"><strong>Mode:</strong> {analysis_mode}</p>
+                <p style="margin: 0.5rem 0;"><strong>Analysis:</strong> {mode_info.get(analysis_mode, 'Custom')}</p>
             </div>
             """, unsafe_allow_html=True)
         
         # Analysis button
         if st.button(f"🚀 Start {analysis_mode}", type="primary", use_container_width=True):
             try:
-                if analysis_mode == "Single Model Analysis":
-                    pipeline = SingleModelAnalysisPipeline()
-                    model_name = list(selected_models.keys())[0]
-                    model_path = list(selected_models.values())[0]
-                    
-                    with st.spinner(f"Running single model analysis with {model_name}..."):
-                        report = pipeline.analyze_video(
-                            video_path, 
-                            model_path, 
-                            model_name, 
-                            frames_per_second,
-                            baseline_name
-                        )
-                
-                elif analysis_mode == "Multi-Model Ensemble Analysis":
-                    pipeline = MultiModelAnalysisPipeline()
-                    with st.spinner(f"Running multi-model analysis with {len(selected_models)} models..."):
-                        report = pipeline.analyze_video(
-                            video_path, 
-                            selected_models, 
-                            frames_per_second,
-                            baseline_name
-                        )
-                
-                elif analysis_mode == "Complete Analysis with Detailed Metadata":
-                    pipeline = CompleteVideoAnalyzer()
-                    with st.spinner(f"Running complete analysis with detailed metadata..."):
-                        report = pipeline.analyze_video(
-                            video_path, 
-                            frames_per_second, 
-                            baseline_name
-                        )
+                if analysis_mode == "Deepfake Detection":
+                    pipeline = DeepfakeAnalysisPipeline()
+                    report = pipeline.analyze_video(video_path, frames_per_second)
                 
                 elif analysis_mode == "Lip Sync Analysis":
                     pipeline = LipSyncAnalyzer()
-                    with st.spinner(f"Running lip sync analysis..."):
-                        report = pipeline.analyze_video(
-                            video_path, 
-                            cer_threshold, 
-                            conf_threshold, 
-                            freeze_limit
-                        )
+                    report = pipeline.analyze_video(video_path, cer_threshold, conf_threshold, freeze_limit)
                 
-                else:  # Metadata Analysis Only
-                    with st.spinner(f"Running metadata analysis only..."):
-                        report = run_metadata_only_analysis(video_path, baseline_name)
+                elif analysis_mode == "Metadata Analysis":
+                    report = run_metadata_analysis(video_path, baseline_name)
+                
+                else:  # Complete Analysis
+                    pipeline = CompleteVideoAnalyzer()
+                    report = pipeline.analyze_video(video_path, frames_per_second, baseline_name)
                 
                 # Download report option
                 if report:
@@ -2819,9 +2511,9 @@ def main():
         st.markdown("""
         <div style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); 
                     padding: 3rem; border-radius: 15px; text-align: center; margin: 2rem 0;">
-            <h2 style="color: #2c3e50; margin: 0 0 1rem 0;">🔬 Ready for Complete Analysis</h2>
+            <h2 style="color: #2c3e50; margin: 0 0 1rem 0;">🔬 Ready for Authenticity Analysis</h2>
             <p style="color: #2c3e50; margin: 0; font-size: 1.1rem;">
-                Upload a video file to start comprehensive authenticity analysis with complete forensic metadata
+                Upload a video file to start comprehensive authenticity analysis
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -2829,72 +2521,58 @@ def main():
         # Feature highlights
         st.markdown("### ✨ Analysis Modes Available")
         
-        # Update the feature highlights in the welcome message section:
-        col1, col2, col3, col4, col5 = st.columns(5)  # Change from 4 to 5 columns
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.markdown("""
-            <div class="forensic-box">
-                <h4>🔍 Single Model</h4>
-                <p>Deepfake detection with one model + metadata analysis</p>
+            <div class="mode-card">
+                <h4>🤖 Deepfake Detection</h4>
+                <p>Weighted ensemble with safety layer</p>
             </div>
             """, unsafe_allow_html=True)
 
         with col2:
             st.markdown("""
-            <div class="forensic-box">
-                <h4>🤖 Multi-Model</h4>
-                <p>Ensemble deepfake detection + metadata analysis</p>
+            <div class="mode-card">
+                <h4>👄 Lip Sync Analysis</h4>
+                <p>Audio-visual synchronization verification</p>
             </div>
             """, unsafe_allow_html=True)
 
         with col3:
             st.markdown("""
-            <div class="forensic-box">
-                <h4>📊 Complete Analysis</h4>
-                <p>All models + detailed forensic metadata</p>
+            <div class="mode-card">
+                <h4>🔍 Metadata Analysis</h4>
+                <p>Complete forensic metadata analysis</p>
             </div>
             """, unsafe_allow_html=True)
 
         with col4:
             st.markdown("""
-            <div class="forensic-box">
-                <h4>👄 Lip Sync</h4>
-                <p>Audio-visual synchronization verification</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with col5:
-            st.markdown("""
-            <div class="forensic-box">
-                <h4>🔬 Metadata Only</h4>
-                <p>Only forensic metadata analysis</p>
+            <div class="mode-card">
+                <h4>🔬 Complete Analysis</h4>
+                <p>All three methods combined</p>
             </div>
             """, unsafe_allow_html=True)
         
-        analysis_sections = [
-            ("[1] File Integrity", "SHA-256 hash, file size, verification"),
-            ("[2] Creation Metadata", "Timestamps, author info, comments"),
-            ("[3] Encoding Information", "Encoder details, bitrate, format"),
-            ("[4] Frame Details", "Resolution, FPS, codec information"),
-            ("[5] Edit Detection", "Tampering indicators, FPS mismatches"),
-            ("[6] Forensic Summary", "Risk assessment and final verdict")
-        ]
+        # Ensemble details
+        st.markdown("### 🎯 Weighted Ensemble Configuration")
         
-        for i, (title, desc) in enumerate(analysis_sections):
-            if i % 2 == 0:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.info(f"**{title}**\n\n{desc}")
-            else:
-                with col2:
-                    st.info(f"**{title}**\n\n{desc}")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.info("**Primary Model**\n\nCeleb + Image (Level 2.5)\n\n**Weight:** 50%")
+        with col2:
+            st.info("**Support Model**\n\nXception Progressive (L2)\n\n**Weight:** 30%")
+        with col3:
+            st.info("**Experimental**\n\nNew Deepfake (Epoch 10)\n\n**Weight:** 20%")
+        with col4:
+            st.info("**Safety Layer**\n\nXception Deployment\n\n**Confirms REAL verdicts**")
     
-    # Update the footer:
+    # Footer
     st.markdown("""
     <div style="text-align: center; color: #666; margin-top: 2rem;">
-        <p><strong>Complete Video Authenticity Analyzer</strong> | Deepfake Detection + Forensic Metadata + Lip Sync Analysis</p>
-        <p style="font-size: 0.9rem;">Now with audio-visual synchronization verification</p>
+        <p><strong>Video Authenticity Analyzer</strong> | Weighted Ensemble Deepfake Detection + Lip Sync + Metadata Analysis</p>
+        <p style="font-size: 0.9rem;">Decision Rule: Weighted score ≥ 0.5 → FAKE | Safety: REAL requires Xception Deployment confirmation</p>
     </div>
     """, unsafe_allow_html=True)
 

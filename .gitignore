@@ -1,28 +1,44 @@
-# Virtual environment
-venv/
-
-# Python cache
-__pycache__/
-*.pyc
-
-# Model weights
-*.pth
-*.pt
-*.onnx
-
-# Data & outputs
-video/
+analysis_results/
+baselines/
+combined_analysis_results/
+complete_analysis_results/
+complete_results/
+deepfake_results/
 extracted_faces/
 extracted_frames/
-analysis_results/
 lip_sync_results/
 metadata_reports/
+metadata_results/
 multi_model_analysis_results/
+multi_model_results/
 single_model_results/
 
-# IDE
-.vscode/
-
-# Temporary files
-*.json
-*.log
+# Large/binary artifacts
+DEEPFAKE_MODELS/
+venv/
+lipsync_model/
+preprocessing/models/
+preprocessing/__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.h5
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.wmv
+*.webm
+*.m4v
+*.flv
+*.docx
+video/

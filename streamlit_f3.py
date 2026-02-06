@@ -72,7 +72,7 @@ MODEL_PATHS = {
     "Celeb + Image Model (Level 2)":
         "DEEPFAKE_MODELS/2-df.pth",
 
-    "Celeb + Image Model (Level 2.5 - Advanced)":
+    "=== Celeb + Image Model (Level 2.5 - Advanced)":
         "DEEPFAKE_MODELS/2.5-df.pth",
 
     # ==========================================================
@@ -90,7 +90,7 @@ MODEL_PATHS = {
     "Xception Fine-tuned (Level 1)":
         "DEEPFAKE_MODELS/fine_tuned_xception_model/best_fine_tuned_model.pth",
 
-    "Xception Progressive Fine-tuned (Level 2)":
+    "=== Xception Progressive Fine-tuned (Level 2)":
         "DEEPFAKE_MODELS/progressive_fine_tuned_model/2nd_tuned_xception_model.pth",
 
     "Xception Progressive Fine-tuned (Final)":
@@ -99,7 +99,7 @@ MODEL_PATHS = {
     # ==========================================================
     # NEW / EXPERIMENTAL MODELS
     # ==========================================================
-    "New Deepfake Model (Experimental – Epoch 10)":
+    "=== New Deepfake Model (Experimental – Epoch 10)":
         "DEEPFAKE_MODELS/new_deepfake_model/checkpoint_epoch_10.pth",
 
     "New Deepfake Model (Working – Unverified)":
@@ -111,7 +111,7 @@ MODEL_PATHS = {
     "Best EfficientNet-B4 Model (Production)":
         "DEEPFAKE_MODELS/best_B4_model.pth",
 
-    "Xception Face Model (Deployment Ready)":
+    "Xception Model (Deployment Ready)":
         "DEEPFAKE_MODELS/xception_deepfake_model/best_face_model.pth",
 
     # ==========================================================
@@ -2258,9 +2258,9 @@ class CompleteVideoAnalyzer:
                 st.error("❌ No faces detected. Exiting.")
                 return None
         
-        # Step 3: Initialize Deepfake Models
+        # Step 3: Initialize Deepfake_Models
         with st.container():
-            st.markdown("### 🤖 STEP 3: Loading Deepfake Models")
+            st.markdown("### 🤖 STEP 3: Loading Deepfake_Models")
             available_models = {}
             for model_name, model_path in MODEL_PATHS.items():
                 if os.path.exists(model_path):
@@ -2711,10 +2711,10 @@ def main():
         elif analysis_mode == "Lip Sync Analysis":
             st.markdown("### 👄 Lip Sync Analysis")
             st.info("Audio-visual synchronization verification")
-            selected_models = {}  # No deepfake models needed for lip sync
+            selected_models = {}  # No deepfake_models needed for lip sync
         else:  # Metadata Analysis Only
             st.markdown("### 🔍 Metadata Analysis Only")
-            st.info("No deepfake models will be loaded - only metadata analysis will be performed")
+            st.info("No deepfake_models will be loaded - only metadata analysis will be performed")
             selected_models = {}
         
         # Analysis parameters - add lip sync parameters here
