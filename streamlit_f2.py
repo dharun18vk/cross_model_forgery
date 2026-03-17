@@ -72,7 +72,7 @@ MODEL_PATHS = {
     "Celeb + Image Model (Level 2)":
         "DEEPFAKE_MODELS/2-df.pth",
 
-    "Celeb + Image Model (Level 2.5 - Advanced)":
+    "=== Celeb + Image Model (Level 2.5 - Advanced)":
         "DEEPFAKE_MODELS/2.5-df.pth",
 
     # ==========================================================
@@ -88,22 +88,22 @@ MODEL_PATHS = {
     # XCEPTION – FINE-TUNED & PROGRESSIVE TRAINING
     # ==========================================================
     "Xception Fine-tuned (Level 1)":
-        "fine_tuned_xception_model/best_fine_tuned_model.pth",
+        "DEEPFAKE_MODELS/fine_tuned_xception_model/best_fine_tuned_model.pth",
 
-    "Xception Progressive Fine-tuned (Level 2)":
-        "progressive_fine_tuned_model/2nd_tuned_xception_model.pth",
+    "=== Xception Progressive Fine-tuned (Level 2)":
+        "DEEPFAKE_MODELS/progressive_fine_tuned_model/2nd_tuned_xception_model.pth",
 
     "Xception Progressive Fine-tuned (Final)":
-        "progressive_fine_tuned_model/final_progressive_model.pth",
+        "DEEPFAKE_MODELS/progressive_fine_tuned_model/final_progressive_model.pth",
 
     # ==========================================================
     # NEW / EXPERIMENTAL MODELS
     # ==========================================================
-    "New Deepfake Model (Experimental – Epoch 10)":
-        "new_deepfake_model/checkpoint_epoch_10.pth",
+    "=== New Deepfake Model (Experimental – Epoch 10)":
+        "DEEPFAKE_MODELS/new_deepfake_model/checkpoint_epoch_10.pth",
 
     "New Deepfake Model (Working – Unverified)":
-        "new_deepfake_model/unknown_working_model.pth",
+        "DEEPFAKE_MODELS/new_deepfake_model/unknown_working_model.pth",
 
     # ==========================================================
     # PRODUCTION / DEPLOYMENT READY
@@ -111,8 +111,8 @@ MODEL_PATHS = {
     "Best EfficientNet-B4 Model (Production)":
         "DEEPFAKE_MODELS/best_B4_model.pth",
 
-    "Xception Face Model (Deployment Ready)":
-        "xception_deepfake_model/best_face_model.pth",
+    "Xception Model (Deployment Ready)":
+        "DEEPFAKE_MODELS/xception_deepfake_model/best_face_model.pth",
 
     # ==========================================================
     # TRAINING RESUME CHECKPOINTS
@@ -120,8 +120,6 @@ MODEL_PATHS = {
     "FF++ Stage-3 Training Checkpoint (Latest)":
         "DEEPFAKE_MODELS/latest_stage3_checkpoint.pth",
 }
-
-
 # =============================================================================
 # LIP SYNC CONFIGURATION
 # =============================================================================
@@ -935,7 +933,7 @@ class FrameExtractor:
     
     def extract_frames(self, video_path, frames_per_second=1):
         """Extract frames from video at specified rate."""
-        with st.status("🎬 **Extracting frames from video...**", expanded=True) as status:
+        with st.spinner("🎬 **Extracting frames from video...**"):
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
                 st.error(f"❌ Error opening video file: {video_path}")
@@ -945,14 +943,6 @@ class FrameExtractor:
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             duration = total_frames / fps
             
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("🎯 FPS", f"{fps:.2f}")
-            with col2:
-                st.metric("📊 Total Frames", f"{total_frames}")
-            with col3:
-                st.metric("⏱️ Duration", f"{duration:.2f}s")
-            
             frame_interval = max(1, int(fps / frames_per_second))
             extracted_frames = []
             frame_count = 0
@@ -960,9 +950,6 @@ class FrameExtractor:
             video_name = os.path.splitext(os.path.basename(video_path))[0]
             video_frames_dir = os.path.join(self.output_dir, video_name)
             os.makedirs(video_frames_dir, exist_ok=True)
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
             
             while True:
                 ret, frame = cap.read()
@@ -980,15 +967,15 @@ class FrameExtractor:
                     })
                 
                 frame_count += 1
-                if frame_count % 50 == 0:
-                    progress = min(float(frame_count / total_frames), 1.0)
-                    progress_bar.progress(progress)
-                    status_text.text(f"🔄 Processed {frame_count}/{total_frames} frames")
             
             cap.release()
-            progress_bar.progress(1.0)
-            status.update(label=f"✅ **Frame Extraction Complete** - Extracted {len(extracted_frames)} frames", state="complete")
-        return extracted_frames
+            
+        return extracted_frames, {
+            'fps': fps,
+            'total_frames': total_frames,
+            'duration': duration,
+            'extracted_count': len(extracted_frames)
+        }
 
 
 # =============================================================================
@@ -1003,71 +990,53 @@ class RetinaFaceDetector:
     
     def detect_and_extract_faces(self, frame_paths, min_face_size=40, confidence_threshold=0.9):
         """Detect and extract faces from frames."""
-        with st.status("👤 **Detecting and extracting faces using RetinaFace...**", expanded=True) as status:
-            all_faces = []
-            face_count = 0
+        all_faces = []
+        face_count = 0
+        
+        for i, frame_info in enumerate(frame_paths):
+            frame_path = frame_info['path']
             
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for i, frame_info in enumerate(frame_paths):
-                frame_path = frame_info['path']
+            try:
+                faces = RetinaFace.detect_faces(frame_path)
                 
-                try:
-                    faces = RetinaFace.detect_faces(frame_path)
-                    
-                    if faces and isinstance(faces, dict):
-                        for face_id, face_info in faces.items():
-                            facial_area = face_info['facial_area']
-                            score = face_info['score']
+                if faces and isinstance(faces, dict):
+                    for face_id, face_info in faces.items():
+                        facial_area = face_info['facial_area']
+                        score = face_info['score']
+                        
+                        if score >= confidence_threshold:
+                            x1, y1, x2, y2 = facial_area
+                            face_width = x2 - x1
+                            face_height = y2 - y1
                             
-                            if score >= confidence_threshold:
-                                x1, y1, x2, y2 = facial_area
-                                face_width = x2 - x1
-                                face_height = y2 - y1
+                            if face_width >= min_face_size and face_height >= min_face_size:
+                                image = Image.open(frame_path).convert('RGB')
+                                padding = 20
+                                x1_pad = max(0, x1 - padding)
+                                y1_pad = max(0, y1 - padding)
+                                x2_pad = min(image.width, x2 + padding)
+                                y2_pad = min(image.height, y2 + padding)
                                 
-                                if face_width >= min_face_size and face_height >= min_face_size:
-                                    image = Image.open(frame_path).convert('RGB')
-                                    padding = 20
-                                    x1_pad = max(0, x1 - padding)
-                                    y1_pad = max(0, y1 - padding)
-                                    x2_pad = min(image.width, x2 + padding)
-                                    y2_pad = min(image.height, y2 + padding)
-                                    
-                                    face_image = image.crop((x1_pad, y1_pad, x2_pad, y2_pad))
-                                    face_filename = f"face_{face_count:06d}.jpg"
-                                    face_path = os.path.join(self.face_output_dir, face_filename)
-                                    face_image.save(face_path)
-                                    
-                                    face_info = {
-                                        'face_path': face_path,
-                                        'frame_path': frame_path,
-                                        'frame_number': int(frame_info['frame_number']),
-                                        'timestamp': float(frame_info['timestamp']),
-                                        'bbox': [int(x1), int(y1), int(x2), int(y2)],
-                                        'confidence': float(score),
-                                        'face_id': int(face_count)
-                                    }
-                                    all_faces.append(face_info)
-                                    face_count += 1
-                    
-                except Exception as e:
-                    continue
+                                face_image = image.crop((x1_pad, y1_pad, x2_pad, y2_pad))
+                                face_filename = f"face_{face_count:06d}.jpg"
+                                face_path = os.path.join(self.face_output_dir, face_filename)
+                                face_image.save(face_path)
+                                
+                                face_info = {
+                                    'face_path': face_path,
+                                    'frame_path': frame_path,
+                                    'frame_number': int(frame_info['frame_number']),
+                                    'timestamp': float(frame_info['timestamp']),
+                                    'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                                    'confidence': float(score),
+                                    'face_id': int(face_count)
+                                }
+                                all_faces.append(face_info)
+                                face_count += 1
                 
-                progress = float((i + 1) / len(frame_paths))
-                progress_bar.progress(progress)
-                status_text.text(f"🔍 Processed {i+1}/{len(frame_paths)} frames - Found {face_count} faces")
-            
-            status.update(label=f"✅ **Face Detection Complete** - Detected {len(all_faces)} faces", state="complete")
-            
-            # Show face detection summary
-            if all_faces:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.success(f"👥 **Total Faces Found:** {len(all_faces)}")
-                with col2:
-                    avg_confidence = np.mean([face['confidence'] for face in all_faces])
-                    st.info(f"🎯 **Average Confidence:** {avg_confidence:.3f}")
+            except Exception as e:
+                continue
+        
         return all_faces
 
 
@@ -1087,7 +1056,6 @@ class DeepFakeDetector:
     def load_model(self, model_path):
         """Load the deepfake detection model."""
         if not os.path.exists(model_path):
-            st.error(f"❌ Model file not found: {model_path}")
             return None
         
         model = models.resnet50(pretrained=False)
@@ -1117,7 +1085,6 @@ class DeepFakeDetector:
             model.load_state_dict(state_dict, strict=False)
             
         except Exception as e:
-            st.error(f"❌ Error loading model {self.model_name}: {e}")
             return None
         
         model.to(self.device)
@@ -1164,10 +1131,8 @@ class DeepFakeDetector:
             return []
             
         results = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
         
-        for i, face_data in enumerate(face_data_list):
+        for face_data in face_data_list:
             result = self.predict_single_face(face_data['face_path'])
             if result:
                 # Add face metadata to result
@@ -1179,11 +1144,6 @@ class DeepFakeDetector:
                     'detection_confidence': face_data['confidence']
                 })
                 results.append(result)
-            
-            progress = float((i + 1) / len(face_data_list))
-            progress_bar.progress(progress)
-            if (i + 1) % 10 == 0 or (i + 1) == len(face_data_list):
-                status_text.text(f"🧪 Analyzed {i+1}/{len(face_data_list)} faces")
         
         return results
 
@@ -1333,75 +1293,48 @@ class DeepfakeDetectionPipeline:
     
     def analyze_video(self, video_path, selected_models, frames_per_second=1):
         """Analyze video for deepfake detection only."""
-        # Main header
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; margin-bottom: 2rem;">
-            <h1 style="color: white; text-align: center; margin: 0; font-size: 2.5rem;">🤖 Deepfake Detection</h1>
-            <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1.2rem;">AI-Powered Face Manipulation Detection</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
         all_results = {}
         
         # Step 1: Frame Extraction
-        with st.container():
-            st.markdown("### 🎬 STEP 1: Frame Extraction")
-            frames = self.frame_extractor.extract_frames(video_path, frames_per_second)
+        with st.spinner("🎬 Extracting frames from video..."):
+            frames, frame_stats = self.frame_extractor.extract_frames(video_path, frames_per_second)
             if not frames:
                 st.error("❌ No frames extracted. Exiting.")
                 return None
         
         # Step 2: Face Detection
-        with st.container():
-            st.markdown("### 👤 STEP 2: Face Detection")
+        with st.spinner("👤 Detecting faces..."):
             faces = self.face_detector.detect_and_extract_faces(frames)
             if not faces:
                 st.error("❌ No faces detected. Exiting.")
                 return None
         
         # Step 3: Initialize Models
-        with st.container():
-            st.markdown("### 🤖 STEP 3: Loading Models")
-            detectors = {}
-            for model_name, model_path in selected_models.items():
-                detector = DeepFakeDetector(model_path, model_name)
-                if detector.model is not None:
-                    detectors[model_name] = detector
-            
-            if not detectors:
-                st.error("❌ No models loaded successfully.")
-                return None
+        detectors = {}
+        for model_name, model_path in selected_models.items():
+            detector = DeepFakeDetector(model_path, model_name)
+            if detector.model is not None:
+                detectors[model_name] = detector
+        
+        if not detectors:
+            st.error("❌ No models loaded successfully.")
+            return None
         
         # Step 4: Deepfake Analysis
-        with st.container():
-            st.markdown("### 🧪 STEP 4: Deepfake Analysis")
+        with st.spinner("🤖 Analyzing faces for deepfake detection..."):
             all_predictions = {}
             
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for i, (model_name, detector) in enumerate(detectors.items()):
-                status_text.text(f"🧪 Analyzing with {model_name}...")
+            for model_name, detector in detectors.items():
                 predictions = detector.predict_multiple_faces(faces)
                 all_predictions[model_name] = predictions
-                
-                progress = float((i + 1) / len(detectors))
-                progress_bar.progress(progress)
-            
-            status_text.text("✅ All models completed analysis")
             
             # Generate deepfake report
-            deepfake_report = self.generate_deepfake_report(all_predictions, video_path)
+            deepfake_report = self.generate_deepfake_report(all_predictions, video_path, frame_stats, len(faces))
             all_results["deepfake_analysis"] = deepfake_report
-        
-        # Step 5: Display Results
-        with st.container():
-            st.markdown("### 📊 STEP 5: Deepfake Detection Results")
-            self.display_deepfake_results(all_results, video_path, deepfake_report)
         
         return all_results
     
-    def generate_deepfake_report(self, all_predictions, video_path):
+    def generate_deepfake_report(self, all_predictions, video_path, frame_stats, total_faces):
         """Generate deepfake analysis report."""
         model_reports = {}
         
@@ -1409,18 +1342,18 @@ class DeepfakeDetectionPipeline:
             if not predictions:
                 continue
                 
-            total_faces = len(predictions)
+            total_predictions = len(predictions)
             fake_faces = sum(1 for pred in predictions if pred['prediction'] == 'FAKE')
-            real_faces = total_faces - fake_faces
+            real_faces = total_predictions - fake_faces
             
             fake_confidence_avg = float(np.mean([pred['confidence'] for pred in predictions if pred['prediction'] == 'FAKE'])) if fake_faces > 0 else 0.0
             real_confidence_avg = float(np.mean([pred['confidence'] for pred in predictions if pred['prediction'] == 'REAL'])) if real_faces > 0 else 0.0
             
             model_reports[model_name] = {
-                'total_faces_analyzed': int(total_faces),
+                'total_faces_analyzed': int(total_predictions),
                 'fake_faces_detected': int(fake_faces),
                 'real_faces_detected': int(real_faces),
-                'fake_percentage': float((fake_faces / total_faces * 100) if total_faces > 0 else 0),
+                'fake_percentage': float((fake_faces / total_predictions * 100) if total_predictions > 0 else 0),
                 'average_fake_confidence': float(fake_confidence_avg),
                 'average_real_confidence': float(real_confidence_avg),
                 'overall_verdict': "LIKELY FAKE" if fake_faces > real_faces else "LIKELY REAL",
@@ -1442,7 +1375,8 @@ class DeepfakeDetectionPipeline:
             'video_path': video_path,
             'analysis_timestamp': str(np.datetime64('now')),
             'models_used': list(all_predictions.keys()),
-            'total_faces_detected': sum([len(preds) for preds in all_predictions.values()]) // len(all_predictions),
+            'video_stats': frame_stats,
+            'total_faces_detected': total_faces,
             'model_reports': model_reports,
             'ensemble_report': model_reports.get('ENSEMBLE', {})
         }
@@ -1452,28 +1386,44 @@ class DeepfakeDetectionPipeline:
         try:
             with open(report_path, 'w') as f:
                 json.dump(report, f, indent=2, cls=NumpyEncoder)
-            st.success(f"✅ Deepfake report saved: {report_path}")
         except Exception as e:
-            st.error(f"❌ Error saving report: {e}")
+            pass
         
         return report
     
-    def display_deepfake_results(self, all_results, video_path, deepfake_report):
-        """Display deepfake detection results."""
-        st.markdown("## 🎯 DEEPFAKE DETECTION RESULTS")
+    def display_deepfake_report(self, deepfake_report):
+        """Display deepfake detection results in a user-friendly format."""
+        st.markdown("## 🤖 Deepfake Detection Report")
         st.markdown("---")
         
         if deepfake_report:
             ensemble_report = deepfake_report.get('ensemble_report', {})
+            video_stats = deepfake_report.get('video_stats', {})
+            models_used = deepfake_report.get('models_used', [])
+            
+            # Video Info
+            st.markdown("### 📹 Video Information")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Duration", f"{video_stats.get('duration', 0):.1f}s")
+            with col2:
+                st.metric("FPS", f"{video_stats.get('fps', 0):.1f}")
+            with col3:
+                st.metric("Total Frames", video_stats.get('total_frames', 0))
+            with col4:
+                st.metric("Extracted Frames", video_stats.get('extracted_count', 0))
+            
+            # Analysis Summary
+            st.markdown("### 📊 Analysis Summary")
             
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("🤖 Models Used", len(deepfake_report.get('models_used', [])))
+                st.metric("Models Used", len(models_used))
             with col2:
-                st.metric("👥 Total Faces", deepfake_report.get('total_faces_detected', 0))
+                st.metric("Faces Detected", deepfake_report.get('total_faces_detected', 0))
             with col3:
                 fake_percentage = ensemble_report.get('fake_percentage', 0)
-                st.metric("🎭 Fake %", f"{fake_percentage:.1f}%")
+                st.metric("Fake %", f"{fake_percentage:.1f}%")
             with col4:
                 verdict = ensemble_report.get('overall_verdict', 'UNKNOWN')
                 verdict_color = "#FF6B6B" if verdict == "LIKELY FAKE" else "#4ECDC4"
@@ -1483,31 +1433,83 @@ class DeepfakeDetectionPipeline:
                 </div>
                 """, unsafe_allow_html=True)
             
-            # Model comparison chart
-            model_names = []
-            fake_percentages = []
+            # Detailed Results
+            st.markdown("### 🔍 Detailed Results")
             
-            for model_name, model_report in deepfake_report.get('model_reports', {}).items():
-                if model_name != 'ENSEMBLE':
-                    model_names.append(model_name)
-                    fake_percentages.append(model_report.get('fake_percentage', 0))
-            
-            if model_names:
-                comparison_data = pd.DataFrame({
-                    'Model': model_names,
-                    'Fake Percentage': fake_percentages
-                })
+            if len(models_used) > 1:
+                # Model comparison chart
+                model_names = []
+                fake_percentages = []
                 
-                fig_comparison = px.bar(
-                    comparison_data,
-                    x='Model',
-                    y='Fake Percentage',
-                    title='Deepfake Detection by Model',
-                    color='Fake Percentage',
-                    color_continuous_scale='RdYlGn_r'
-                )
-                fig_comparison.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig_comparison, use_container_width=True)
+                for model_name, model_report in deepfake_report.get('model_reports', {}).items():
+                    if model_name != 'ENSEMBLE':
+                        model_names.append(model_name)
+                        fake_percentages.append(model_report.get('fake_percentage', 0))
+                
+                if model_names:
+                    comparison_data = pd.DataFrame({
+                        'Model': model_names,
+                        'Fake Percentage': fake_percentages
+                    })
+                    
+                    fig_comparison = px.bar(
+                        comparison_data,
+                        x='Model',
+                        y='Fake Percentage',
+                        title='Deepfake Detection by Model',
+                        color='Fake Percentage',
+                        color_continuous_scale='RdYlGn_r'
+                    )
+                    fig_comparison.update_layout(xaxis_tickangle=-45)
+                    st.plotly_chart(fig_comparison, use_container_width=True)
+            
+            # Expert Details (in expander)
+            with st.expander("🔬 Expert Technical Details"):
+                st.markdown("#### Model Performance")
+                model_details = []
+                for model_name, model_report in deepfake_report.get('model_reports', {}).items():
+                    if model_name != 'ENSEMBLE':
+                        model_details.append({
+                            'Model': model_name,
+                            'Faces Analyzed': model_report.get('total_faces_analyzed', 0),
+                            'Fake Detected': model_report.get('fake_faces_detected', 0),
+                            'Fake %': f"{model_report.get('fake_percentage', 0):.1f}%",
+                            'Avg Fake Confidence': f"{model_report.get('average_fake_confidence', 0):.3f}",
+                            'Verdict': model_report.get('overall_verdict', 'N/A')
+                        })
+                
+                if model_details:
+                    st.table(pd.DataFrame(model_details))
+                
+                st.markdown("#### Ensemble Results")
+                st.json(ensemble_report)
+            
+            # Final Verdict
+            st.markdown("### 🎯 Final Assessment")
+            
+            fake_percentage = ensemble_report.get('fake_percentage', 0)
+            if fake_percentage > 50:
+                st.error(f"**❌ FAKE VIDEO DETECTED** - {fake_percentage:.1f}% of analyzed faces show signs of manipulation")
+                st.markdown("""
+                **Recommendation:** This video is likely artificially generated or manipulated. 
+                Do not trust its authenticity without additional verification.
+                """)
+            elif fake_percentage > 25:
+                st.warning(f"**⚠️ SUSPICIOUS VIDEO** - {fake_percentage:.1f}% of analyzed faces show potential manipulation")
+                st.markdown("""
+                **Recommendation:** Exercise caution. Some artificial manipulation may be present. 
+                Consider additional verification methods.
+                """)
+            else:
+                st.success(f"**✅ AUTHENTIC VIDEO** - Only {fake_percentage:.1f}% of faces show potential manipulation")
+                st.markdown("""
+                **Recommendation:** This video appears to be authentic. 
+                No significant signs of artificial manipulation detected.
+                """)
+            
+            # Confidence Score
+            confidence_score = ensemble_report.get('confidence_score', 0)
+            st.info(f"**Confidence Score:** {confidence_score:.2f}/1.0")
 
 
 # =============================================================================
@@ -1538,7 +1540,6 @@ def load_model():
         raise RuntimeError("CUDA (GPU) is not available. This application requires GPU for lip sync analysis.")
     
     device = torch.device("cuda")
-    st.info(f"🔥 Using device: {device}")
     
     char_to_idx, idx_to_char = build_vocab()
     model = LipReadingModel(len(char_to_idx) + 1).to(device)
@@ -1611,348 +1612,144 @@ class LipSyncAnalyzer:
     
     def analyze_video(self, video_path, cer_threshold=None, conf_threshold=None, freeze_limit=None):
         """Perform lip sync analysis on video."""
-        
-        # Main header
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; margin-bottom: 2rem;">
-            <h1 style="color: white; text-align: center; margin: 0; font-size: 2.5rem;">👄 Lip Sync Analysis</h1>
-            <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1.2rem;">Audio-Visual Synchronization Verification</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
         # Use provided thresholds or defaults
         cer_threshold = cer_threshold or self.config["CER_THRESHOLD"]
         conf_threshold = conf_threshold or self.config["CONF_THRESHOLD"]
         freeze_limit = freeze_limit or self.config["FREEZE_LIMIT"]
         
-        # Step 1: Load model
-        with st.container():
-            st.markdown("### 🤖 STEP 1: Loading Lip Reading Model")
-            with st.spinner("Loading model (GPU only)..."):
-                if not self.load_model_wrapper():
-                    st.error("❌ Failed to load lip sync model")
-                    return None
-            
-            st.success(f"✅ Model loaded successfully on {self.device}")
-        
-        # Step 2: Initialize video analysis
-        with st.container():
-            st.markdown("### 🎬 STEP 2: Video Analysis")
-            
-            # Initialize video capture
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                st.error(f"❌ Failed to open video: {video_path}")
+        # Load model
+        with st.spinner("👄 Loading lip sync analysis model..."):
+            if not self.load_model_wrapper():
+                st.error("❌ Failed to load lip sync model")
                 return None
-            
-            buffer = deque(maxlen=SEQ_LEN)
-            prev_text = ""
-            freeze_count = 0
-            
-            # Get video info
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            duration = total_frames / fps if fps > 0 else 0
-            
-            # Display video info
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Frames", total_frames)
-            with col2:
-                st.metric("FPS", f"{fps:.2f}")
-            with col3:
-                st.metric("Duration", f"{duration:.2f}s")
-            
-            # Create containers for dynamic updates
-            progress_placeholder = st.empty()
-            frame_placeholder = st.empty()
-            metrics_placeholder = st.empty()
-            results_container = st.container()
-            
-            # Results tracking
-            results = {
-                'frame_count': 0,
-                'fake_count': 0,
-                'real_count': 0,
-                'total_decisions': 0,
-                'all_predictions': [],
-                'all_texts': [],
-                'all_cer': [],
-                'all_confidence': []
+        
+        # Initialize video analysis
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            st.error(f"❌ Failed to open video: {video_path}")
+            return None
+        
+        buffer = deque(maxlen=SEQ_LEN)
+        prev_text = ""
+        freeze_count = 0
+        
+        # Get video info
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        duration = total_frames / fps if fps > 0 else 0
+        
+        # Results tracking
+        results = {
+            'frame_count': 0,
+            'fake_count': 0,
+            'real_count': 0,
+            'total_decisions': 0,
+            'all_predictions': [],
+            'all_texts': [],
+            'all_cer': [],
+            'all_confidence': [],
+            'video_stats': {
+                'total_frames': total_frames,
+                'fps': fps,
+                'duration': duration
             }
-            
-            # Start analysis
-            with results_container:
-                st.markdown("### 📊 Real-time Analysis")
+        }
+        
+        # Analysis loop
+        with st.spinner("👄 Analyzing lip sync..."):
+            frame_idx = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
                 
-                # Create progress bar
-                progress_bar = st.progress(0)
-                status_text = st.empty()
+                frame_idx += 1
+                results['frame_count'] = frame_idx
                 
-                # Analysis loop
-                frame_idx = 0
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
+                # Extract mouth region
+                mouth = extract_mouth_frame(frame, IMG_SIZE)
+                if mouth is None:
+                    continue
+                
+                mouth = mouth.astype("float32") / 255.0
+                buffer.append(mouth)
+                
+                # Only process when buffer is full
+                if len(buffer) == SEQ_LEN:
+                    seq_np = np.stack(buffer)
+                    seq = torch.from_numpy(seq_np) \
+                               .unsqueeze(0) \
+                               .unsqueeze(2) \
+                               .float() \
+                               .to(self.device)
                     
-                    frame_idx += 1
-                    results['frame_count'] = frame_idx
+                    with torch.no_grad():
+                        logits = self.model(seq)
+                        probs = logits.softmax(dim=-1)[0]
+                        curr_text = greedy_decode(probs, self.idx_to_char)
                     
-                    # Update progress
-                    progress = min(frame_idx / total_frames, 1.0)
-                    progress_bar.progress(progress)
-                    status_text.text(f"🔄 Processing frame {frame_idx}/{total_frames}")
+                    # Calculate metrics
+                    drift = cer(curr_text, prev_text)
+                    confidence = probs.max(dim=1)[0].mean().item()
+                    lang_score = language_quality(curr_text)
                     
-                    # Extract mouth region
-                    mouth = extract_mouth_frame(frame, IMG_SIZE)
-                    if mouth is None:
-                        continue
+                    # Freeze detection
+                    if curr_text == prev_text and len(curr_text) > 5:
+                        freeze_count += 1
+                    else:
+                        freeze_count = 0
                     
-                    mouth = mouth.astype("float32") / 255.0
-                    buffer.append(mouth)
-                    
-                    # Only process when buffer is full
-                    if len(buffer) == SEQ_LEN:
-                        seq_np = np.stack(buffer)
-                        seq = torch.from_numpy(seq_np) \
-                                   .unsqueeze(0) \
-                                   .unsqueeze(2) \
-                                   .float() \
-                                   .to(self.device)
-                        
-                        with torch.no_grad():
-                            logits = self.model(seq)
-                            probs = logits.softmax(dim=-1)[0]
-                            curr_text = greedy_decode(probs, self.idx_to_char)
-                        
-                        # Calculate metrics
-                        drift = cer(curr_text, prev_text)
-                        confidence = probs.max(dim=1)[0].mean().item()
-                        lang_score = language_quality(curr_text)
-                        
-                        # Freeze detection
-                        if curr_text == prev_text and len(curr_text) > 5:
-                            freeze_count += 1
+                    # Make prediction
+                    prediction = None
+                    if frame_idx < SEQ_LEN * 3:
+                        prediction = "WARMUP"
+                    else:
+                        if (drift > cer_threshold or 
+                            confidence < conf_threshold or 
+                            lang_score < 2.5 or 
+                            freeze_count > freeze_limit):
+                            prediction = "FAKE"
+                            results['fake_count'] += 1
                         else:
-                            freeze_count = 0
+                            prediction = "REAL"
+                            results['real_count'] += 1
                         
-                        # Make prediction
-                        prediction = None
-                        if frame_idx < SEQ_LEN * 3:
-                            status = "WARMING UP"
-                            prediction = "WARMUP"
-                        else:
-                            if (drift > cer_threshold or 
-                                confidence < conf_threshold or 
-                                lang_score < 2.5 or 
-                                freeze_count > freeze_limit):
-                                status = "❌ FAKE FRAME"
-                                prediction = "FAKE"
-                                results['fake_count'] += 1
-                            else:
-                                status = "✅ REAL FRAME"
-                                prediction = "REAL"
-                                results['real_count'] += 1
-                            
-                            results['total_decisions'] += 1
-                        
-                        # Store results
-                        if prediction:
-                            results['all_predictions'].append(prediction)
-                            results['all_texts'].append(curr_text)
-                            results['all_cer'].append(drift)
-                            results['all_confidence'].append(confidence)
-                        
-                        prev_text = curr_text
-                        
-                        # Update display
-                        self._update_display(
-                            frame, frame_idx, curr_text, drift, confidence, 
-                            lang_score, status, frame_placeholder, metrics_placeholder
-                        )
-            
-            # Clean up
-            cap.release()
-            progress_bar.progress(1.0)
-            status_text.text("✅ Analysis complete!")
-            
-            # Display final results
-            self._display_final_results(results)
+                        results['total_decisions'] += 1
+                    
+                    # Store results
+                    if prediction:
+                        results['all_predictions'].append(prediction)
+                        results['all_texts'].append(curr_text)
+                        results['all_cer'].append(drift)
+                        results['all_confidence'].append(confidence)
+                    
+                    prev_text = curr_text
+        
+        # Clean up
+        cap.release()
+        
+        # Determine final verdict
+        if results['total_decisions'] == 0:
+            results['final_verdict'] = "INCONCLUSIVE"
+            results['fake_ratio'] = 0
+        else:
+            fake_ratio = results['fake_count'] / results['total_decisions']
+            if fake_ratio > 0.50:
+                results['final_verdict'] = "FAKE"
+            elif fake_ratio >= 0.30:
+                results['final_verdict'] = "SUSPICIOUS"
+            else:
+                results['final_verdict'] = "REAL"
+            results['fake_ratio'] = fake_ratio
         
         # Save results
-        report_path = self.save_results(results, video_path)
+        self.save_results(results, video_path)
         
         return results
     
-    def _update_display(self, frame, frame_idx, curr_text, drift, confidence, lang_score, status, frame_placeholder, metrics_placeholder):
-        """Update the display with current frame and metrics."""
-        # Convert frame to RGB for display
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Add overlay text
-        overlay = frame_rgb.copy()
-        y_offset = 40
-        cv2.putText(overlay, f"Frame: {frame_idx}", 
-                   (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 
-                   0.7, (255, 255, 255), 2)
-        
-        cv2.putText(overlay, f"Status: {status}", 
-                   (20, y_offset + 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                   0.7, (0, 255, 0) if "REAL" in status else (255, 0, 0) if "FAKE" in status else (255, 165, 0), 2)
-        
-        if curr_text:
-            cv2.putText(overlay, f"Text: {curr_text[:20]}...", 
-                       (20, y_offset + 60), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.6, (255, 255, 255), 2)
-        
-        cv2.putText(overlay, f"CER Drift: {drift:.3f}", 
-                   (20, y_offset + 90), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.6, (255, 255, 255), 2)
-        
-        cv2.putText(overlay, f"Confidence: {confidence:.3f}", 
-                   (20, y_offset + 120), cv2.FONT_HERSHEY_SIMPLEX, 
-                   0.6, (255, 255, 255), 2)
-        
-        # Display frame
-        frame_placeholder.image(overlay, channels="RGB", caption=f"Frame {frame_idx}")
-        
-        # Display metrics
-        with metrics_placeholder.container():
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Status", status)
-            with col2:
-                st.metric("CER Drift", f"{drift:.3f}")
-            with col3:
-                st.metric("Confidence", f"{confidence:.3f}")
-            with col4:
-                st.metric("Language Score", f"{lang_score:.2f}")
-    
-    def _display_final_results(self, results):
-        """Display final analysis results."""
-        st.success("✅ Analysis Complete!")
-        
-        # Display results summary
-        st.markdown("## 📊 Results Summary")
-        
-        if results['total_decisions'] > 0:
-            # Calculate metrics
-            total_decisions = results['total_decisions']
-            real_count = results['real_count']
-            fake_count = results['fake_count']
-            fake_ratio = fake_count / total_decisions if total_decisions > 0 else 0
-            
-            # Display metrics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Total Frames", results['frame_count'])
-            with col2:
-                st.metric("Total Decisions", total_decisions)
-            with col3:
-                st.metric("REAL Count", real_count)
-            with col4:
-                st.metric("FAKE Count", fake_count)
-            
-            # Create prediction chart
-            if results['all_predictions']:
-                st.markdown("### 📈 Prediction Timeline")
-                predictions_df = pd.DataFrame({
-                    'Sequence': range(len(results['all_predictions'])),
-                    'Prediction': [1 if p == "REAL" else 0 if p == "FAKE" else 0.5 for p in results['all_predictions']]
-                })
-                
-                fig = px.line(
-                    predictions_df, 
-                    x='Sequence', 
-                    y='Prediction',
-                    title='Real/Fake Predictions Over Time',
-                    labels={'Prediction': 'Prediction (1=Real, 0=Fake, 0.5=Warmup)'}
-                )
-                fig.update_traces(line=dict(color='blue', width=2))
-                fig.update_yaxes(range=[-0.1, 1.1])
-                st.plotly_chart(fig, use_container_width=True)
-            
-            # Final prediction based on 50% threshold
-            st.markdown("### 🎯 Final Assessment")
-            
-            if total_decisions == 0:
-                st.warning("⚠️ **INCONCLUSIVE** - Not enough decisions made")
-                final_verdict = "INCONCLUSIVE"
-                verdict_color = "warning"
-            elif fake_ratio > 0.50:
-                st.error(f"❌ **FAKE VIDEO** - {fake_ratio*100:.1f}% of frames show lip sync issues (over 50%)")
-                final_verdict = "FAKE"
-                verdict_color = "error"
-            elif fake_ratio >= 0.30:
-                st.warning(f"⚠️ **SUSPICIOUS** - {fake_ratio*100:.1f}% of frames show potential lip sync issues")
-                final_verdict = "SUSPICIOUS"
-                verdict_color = "warning"
-            else:
-                st.success(f"✅ **REAL VIDEO** - Only {fake_ratio*100:.1f}% of frames show lip sync issues")
-                final_verdict = "REAL"
-                verdict_color = "success"
-            
-            # Display verdict with clear color coding
-            st.markdown(f"""
-            <div style="background: {'#FF6B6B' if final_verdict == 'FAKE' else '#FFD166' if final_verdict == 'SUSPICIOUS' else '#06D6A0' if final_verdict == 'REAL' else '#6C757D'}; 
-                        padding: 1.5rem; border-radius: 10px; text-align: center; margin: 1rem 0;">
-                <h2 style="color: white; margin: 0;">Final Verdict: {final_verdict}</h2>
-                <p style="color: white; margin: 0.5rem 0 0 0; font-size: 1.1rem;">
-                    Fake Frames: {fake_count}/{total_decisions} ({fake_ratio*100:.1f}%)
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Sample text predictions
-            if results['all_texts']:
-                st.markdown("### 📝 Sample Text Predictions")
-                unique_texts = list(dict.fromkeys([t for t in results['all_texts'] if t.strip()]))
-                if unique_texts:
-                    for i, text in enumerate(unique_texts[:5]):
-                        st.text(f"{i+1}. {text[:50]}{'...' if len(text) > 50 else ''}")
-            
-            # Metrics summary
-            st.markdown("### 📊 Metrics Summary")
-            metrics_df = pd.DataFrame({
-                'Metric': ['Average CER', 'Average Confidence', 'Language Quality', 'Fake Frame Ratio'],
-                'Value': [
-                    f"{np.mean(results['all_cer']):.3f}" if results['all_cer'] else "N/A",
-                    f"{np.mean(results['all_confidence']):.3f}" if results['all_confidence'] else "N/A",
-                    f"{language_quality(' '.join(results['all_texts'])):.2f}" if results['all_texts'] else "N/A",
-                    f"{fake_ratio*100:.1f}%"
-                ]
-            })
-            st.table(metrics_df)
-            
-            # Return the verdict for use in combined analysis
-            results['final_verdict'] = final_verdict
-            results['fake_ratio'] = fake_ratio
-            
-        else:
-            st.warning("⚠️ No decisions were made during analysis. This could indicate:")
-            st.markdown("""
-            - Video too short for analysis
-            - No speech detected
-            - Technical issues with lip detection
-            - Insufficient frames for analysis
-            """)
-            results['final_verdict'] = "INCONCLUSIVE"
-            results['fake_ratio'] = 0
-    
     def save_results(self, results, video_path):
         """Save lip sync analysis results."""
-        fake_ratio = (results['fake_count'] / results['total_decisions'] * 100) if results['total_decisions'] > 0 else 0
-        
-        # Determine final verdict based on 50% threshold
-        if results['total_decisions'] == 0:
-            final_verdict = "INCONCLUSIVE"
-        elif fake_ratio > 50:
-            final_verdict = "FAKE"
-        elif fake_ratio >= 30:
-            final_verdict = "SUSPICIOUS"
-        else:
-            final_verdict = "REAL"
+        fake_ratio = results.get('fake_ratio', 0) * 100
         
         report = {
             'video_path': video_path,
@@ -1969,12 +1766,12 @@ class LipSyncAnalyzer:
                 'real_count': results['real_count'],
                 'fake_count': results['fake_count'],
                 'fake_percentage': fake_ratio,
-                'final_verdict': final_verdict,
+                'final_verdict': results.get('final_verdict', 'INCONCLUSIVE'),
                 'verdict_criteria': 'FAKE if > 50% fake frames',
                 'avg_cer': float(np.mean(results['all_cer'])) if results['all_cer'] else 0,
                 'avg_confidence': float(np.mean(results['all_confidence'])) if results['all_confidence'] else 0
             },
-            'detailed_results': results
+            'video_stats': results.get('video_stats', {})
         }
         
         # Save report
@@ -1986,23 +1783,148 @@ class LipSyncAnalyzer:
         try:
             with open(report_path, 'w') as f:
                 json.dump(report, f, indent=2, cls=NumpyEncoder)
-            st.success(f"✅ Lip sync report saved: {report_path}")
-            
-            # Create download button
-            with open(report_path, 'r') as f:
-                report_data = f.read()
-            
-            st.download_button(
-                label="📥 Download Lip Sync Report",
-                data=report_data,
-                file_name=os.path.basename(report_path),
-                mime="application/json"
-            )
-            
         except Exception as e:
-            st.error(f"❌ Error saving report: {e}")
+            pass
         
         return report_path
+    
+    def display_lip_sync_report(self, results):
+        """Display lip sync analysis results in a user-friendly format."""
+        st.markdown("## 👄 Lip Sync Analysis Report")
+        st.markdown("---")
+        
+        video_stats = results.get('video_stats', {})
+        
+        # Video Info
+        st.markdown("### 📹 Video Information")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Duration", f"{video_stats.get('duration', 0):.1f}s")
+        with col2:
+            st.metric("FPS", f"{video_stats.get('fps', 0):.1f}")
+        with col3:
+            st.metric("Total Frames", video_stats.get('total_frames', 0))
+        
+        # Analysis Summary
+        st.markdown("### 📊 Analysis Summary")
+        
+        if results['total_decisions'] > 0:
+            total_decisions = results['total_decisions']
+            real_count = results['real_count']
+            fake_count = results['fake_count']
+            fake_ratio = results.get('fake_ratio', 0) * 100
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Frames Analyzed", results['frame_count'])
+            with col2:
+                st.metric("Decisions Made", total_decisions)
+            with col3:
+                st.metric("Sync Issues", fake_count)
+            with col4:
+                final_verdict = results.get('final_verdict', 'INCONCLUSIVE')
+                verdict_color = "#FF6B6B" if final_verdict == "FAKE" else "#FFD166" if final_verdict == "SUSPICIOUS" else "#06D6A0" if final_verdict == "REAL" else "#6C757D"
+                st.markdown(f"""
+                <div style="background: {verdict_color}; padding: 0.5rem; border-radius: 10px; text-align: center;">
+                    <h4 style="color: white; margin: 0;">Verdict: {final_verdict}</h4>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Metrics
+            st.markdown("### 📈 Analysis Metrics")
+            metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+            with metrics_col1:
+                st.metric("Sync Issue %", f"{fake_ratio:.1f}%")
+            with metrics_col2:
+                avg_cer = np.mean(results['all_cer']) if results['all_cer'] else 0
+                st.metric("Avg Sync Drift", f"{avg_cer:.3f}")
+            with metrics_col3:
+                avg_conf = np.mean(results['all_confidence']) if results['all_confidence'] else 0
+                st.metric("Avg Confidence", f"{avg_conf:.3f}")
+            
+            # Prediction timeline (if enough data)
+            if len(results['all_predictions']) > 10:
+                st.markdown("### 📊 Sync Quality Over Time")
+                predictions_df = pd.DataFrame({
+                    'Sequence': range(len(results['all_predictions'])),
+                    'Sync Quality': [1 if p == "REAL" else 0 if p == "FAKE" else 0.5 for p in results['all_predictions']]
+                })
+                
+                fig = px.line(
+                    predictions_df, 
+                    x='Sequence', 
+                    y='Sync Quality',
+                    title='Lip Sync Quality Over Time',
+                    labels={'Sync Quality': 'Sync Quality (1=Good, 0=Poor)'}
+                )
+                fig.update_traces(line=dict(color='blue', width=2))
+                fig.update_yaxes(range=[-0.1, 1.1])
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Expert Details (in expander)
+            with st.expander("🔬 Expert Technical Details"):
+                st.markdown("#### Detailed Metrics")
+                details = {
+                    'Metric': ['Character Error Rate (CER)', 'Confidence Score', 'Language Quality', 'Freeze Detection', 'Total Decisions'],
+                    'Value': [
+                        f"{np.mean(results['all_cer']):.3f}" if results['all_cer'] else "N/A",
+                        f"{np.mean(results['all_confidence']):.3f}" if results['all_confidence'] else "N/A",
+                        f"{language_quality(' '.join(results['all_texts'])):.2f}" if results['all_texts'] else "N/A",
+                        f"Detected at {self.config['FREEZE_LIMIT']} frames",
+                        f"{total_decisions}"
+                    ]
+                }
+                st.table(pd.DataFrame(details))
+                
+                st.markdown("#### Sample Detected Speech")
+                unique_texts = list(dict.fromkeys([t for t in results['all_texts'] if t.strip()]))
+                if unique_texts:
+                    for i, text in enumerate(unique_texts[:3]):
+                        st.text(f"{i+1}. \"{text[:50]}{'...' if len(text) > 50 else ''}\"")
+            
+            # Final Assessment
+            st.markdown("### 🎯 Final Assessment")
+            
+            if final_verdict == "FAKE":
+                st.error(f"**❌ POOR LIP SYNC DETECTED** - {fake_ratio:.1f}% of speech frames show sync issues")
+                st.markdown("""
+                **Recommendation:** This video likely has artificial or poorly synced audio. 
+                The lip movements do not match the spoken words accurately.
+                """)
+            elif final_verdict == "SUSPICIOUS":
+                st.warning(f"**⚠️ MODERATE SYNC ISSUES** - {fake_ratio:.1f}% of speech frames show sync issues")
+                st.markdown("""
+                **Recommendation:** Some sync issues detected. This could indicate minor manipulation 
+                or natural speech variations. Further verification recommended.
+                """)
+            elif final_verdict == "REAL":
+                st.success(f"**✅ GOOD LIP SYNC** - Only {fake_ratio:.1f}% of speech frames show minor sync issues")
+                st.markdown("""
+                **Recommendation:** Lip movements appear to match spoken words accurately. 
+                This is typical of authentic video footage.
+                """)
+            else:
+                st.info("**ℹ️ INCONCLUSIVE ANALYSIS** - Insufficient speech data for reliable analysis")
+                st.markdown("""
+                **Recommendation:** Video may not contain sufficient speech for lip sync analysis. 
+                Consider using other verification methods.
+                """)
+            
+            # Confidence Indicator
+            sync_confidence = 1.0 - (fake_ratio / 100)
+            st.info(f"**Sync Confidence:** {sync_confidence:.2f}/1.0")
+            
+        else:
+            st.warning("**⚠️ NO SPEECH DETECTED**")
+            st.markdown("""
+            **Analysis Result:** The video does not contain sufficient speech for lip sync analysis.
+            
+            **Possible reasons:**
+            - Video has no audio track
+            - Audio contains no speech (music/silence only)
+            - Speech is too short for analysis
+            - Technical issues with audio extraction
+            """)
 
 # =============================================================================
 # METADATA ANALYSIS PIPELINE
@@ -2018,57 +1940,31 @@ class MetadataAnalysisPipeline:
     
     def analyze_video(self, video_path, baseline_name=None):
         """Perform metadata analysis only."""
-        # Main header
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; margin-bottom: 2rem;">
-            <h1 style="color: white; text-align: center; margin: 0; font-size: 2.5rem;">🔍 Metadata Analysis</h1>
-            <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1.2rem;">Comprehensive Forensic Metadata Analysis</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
         all_results = {}
         
         # Step 1: Basic Metadata Analysis
-        with st.container():
-            st.markdown("### 📋 STEP 1: Basic Metadata Analysis")
+        with st.spinner("🔍 Analyzing video metadata..."):
             metadata_report = self.metadata_analyzer.create_metadata_report(video_path, baseline_name)
             if metadata_report:
                 all_results["metadata_analysis"] = metadata_report
-                st.success("✅ Basic metadata analysis complete")
-            else:
-                st.warning("⚠️ Basic metadata analysis incomplete")
         
         # Step 2: Forensic Metadata Analysis
-        with st.container():
-            st.markdown("### 🔬 STEP 2: Forensic Metadata Analysis")
+        with st.spinner("🔬 Performing forensic analysis..."):
             forensic_report = self.forensic_analyzer.analyze_video(video_path)
             if forensic_report:
                 all_results["forensic_analysis"] = forensic_report
-                st.success("✅ Forensic analysis complete")
-            else:
-                st.warning("⚠️ Forensic analysis incomplete")
-        
-        # Step 3: Display Results
-        with st.container():
-            st.markdown("### 📊 STEP 3: Metadata Analysis Results")
-            self.display_metadata_results(all_results, video_path)
         
         return all_results
     
-    def display_metadata_results(self, all_results, video_path):
+    def display_metadata_report(self, all_results, video_path):
         """Display metadata analysis results."""
+        st.markdown("## 🔍 Metadata Analysis Report")
+        st.markdown("---")
+        
         forensic_report = all_results.get("forensic_analysis")
         if forensic_report:
             self.forensic_analyzer.display_detailed_forensic_report(forensic_report, video_path)
-        
-        # Save report
-        report_path = os.path.join(self.results_dir, f"metadata_{os.path.basename(video_path)}.json")
-        try:
-            with open(report_path, 'w') as f:
-                json.dump(all_results, f, indent=2, cls=NumpyEncoder)
-            st.success(f"✅ Metadata report saved: {report_path}")
-        except Exception as e:
-            st.error(f"❌ Error saving report: {e}")
+
 
 # =============================================================================
 # COMPLETE ANALYSIS PIPELINE (ALL 3)
@@ -2086,46 +1982,41 @@ class CompleteAnalysisPipeline:
     def analyze_video(self, video_path, selected_models, frames_per_second=1, 
                       baseline_name=None, cer_threshold=0.35, conf_threshold=0.45, freeze_limit=10):
         """Perform complete analysis with all 3 components."""
-        # Main header
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; margin-bottom: 2rem;">
-            <h1 style="color: white; text-align: center; margin: 0; font-size: 2.5rem;">🔬 Complete Analysis</h1>
-            <p style="color: white; text-align: center; margin: 0.5rem 0 0 0; font-size: 1.2rem;">Deepfake Detection + Lip Sync + Metadata Analysis</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
         all_results = {}
         
         # Create tabs for each analysis
         tab1, tab2, tab3 = st.tabs(["🤖 Deepfake Detection", "👄 Lip Sync Analysis", "🔍 Metadata Analysis"])
         
         with tab1:
-            st.markdown("### 🤖 DEEPFAKE DETECTION")
-            deepfake_results = self.deepfake_pipeline.analyze_video(video_path, selected_models, frames_per_second)
-            if deepfake_results:
-                all_results["deepfake"] = deepfake_results
+            with st.spinner("🤖 Running deepfake detection..."):
+                deepfake_results = self.deepfake_pipeline.analyze_video(video_path, selected_models, frames_per_second)
+                if deepfake_results:
+                    all_results["deepfake"] = deepfake_results
+                    self.deepfake_pipeline.display_deepfake_report(deepfake_results["deepfake_analysis"])
         
         with tab2:
-            st.markdown("### 👄 LIP SYNC ANALYSIS")
-            lip_sync_results = self.lip_sync_pipeline.analyze_video(video_path, cer_threshold, conf_threshold, freeze_limit)
-            if lip_sync_results:
-                all_results["lip_sync"] = lip_sync_results
+            with st.spinner("👄 Analyzing lip sync..."):
+                lip_sync_results = self.lip_sync_pipeline.analyze_video(video_path, cer_threshold, conf_threshold, freeze_limit)
+                if lip_sync_results:
+                    all_results["lip_sync"] = lip_sync_results
+                    self.lip_sync_pipeline.display_lip_sync_report(lip_sync_results)
         
         with tab3:
-            st.markdown("### 🔍 METADATA ANALYSIS")
-            metadata_results = self.metadata_pipeline.analyze_video(video_path, baseline_name)
-            if metadata_results:
-                all_results["metadata"] = metadata_results
+            with st.spinner("🔍 Analyzing metadata..."):
+                metadata_results = self.metadata_pipeline.analyze_video(video_path, baseline_name)
+                if metadata_results:
+                    all_results["metadata"] = metadata_results
+                    self.metadata_pipeline.display_metadata_report(metadata_results, video_path)
         
         # Display combined results
         if all_results:
-            self.display_combined_results(all_results, video_path)
+            self.display_combined_report(all_results, video_path)
         
         return all_results
     
-    def display_combined_results(self, all_results, video_path):
+    def display_combined_report(self, all_results, video_path):
         """Display combined results from all 3 analyses."""
-        st.markdown("## 🚨 COMBINED ANALYSIS RESULTS")
+        st.markdown("## 🚨 Comprehensive Analysis Report")
         st.markdown("---")
         
         # Collect verdicts from each analysis
@@ -2173,13 +2064,13 @@ class CompleteAnalysisPipeline:
         
         # Display verdicts
         if verdicts:
-            st.markdown("### 📊 Individual Analysis Results")
+            st.markdown("### 📊 Analysis Results Summary")
             cols = st.columns(len(verdicts))
             
             for i, (analysis_name, verdict_info) in enumerate(verdicts.items()):
                 with cols[i]:
                     st.markdown(f"""
-                    <div style="background: {verdict_info['color']}; padding: 1rem; border-radius: 10px; text-align: center;">
+                    <div style="background: {verdict_info['color']}; padding: 1rem; border-radius: 10px; text-align: center; margin-bottom: 1rem;">
                         <h4 style="color: white; margin: 0;">{analysis_name.upper()}</h4>
                         <p style="color: white; margin: 0.5rem 0 0 0; font-size: 1.2rem;">{verdict_info['verdict']}</p>
                         <p style="color: white; margin: 0; font-size: 0.9rem;">Confidence: {verdict_info['confidence']:.1f}%</p>
@@ -2197,12 +2088,70 @@ class CompleteAnalysisPipeline:
             </div>
             """, unsafe_allow_html=True)
             
+            # Detailed recommendations
+            st.markdown("### 📋 Recommendations")
+            
+            if overall_risk['verdict'] == "HIGHLY SUSPICIOUS":
+                st.error("""
+                **⚠️ CRITICAL WARNING - HIGH RISK DETECTED**
+                
+                **Immediate Actions:**
+                1. **DO NOT** trust this video for any official or verification purposes
+                2. Report the video to appropriate authorities if it contains misleading information
+                3. Seek additional verification from multiple independent sources
+                4. Consider the source and context of the video carefully
+                
+                **Technical Findings:**
+                - Multiple analysis methods detected significant manipulation
+                - High probability of artificial content creation
+                - Metadata suggests potential tampering
+                """)
+            elif overall_risk['verdict'] == "SUSPICIOUS":
+                st.warning("""
+                **⚠️ CAUTION REQUIRED - MODERATE RISK DETECTED**
+                
+                **Recommended Actions:**
+                1. Verify information from this video with other reliable sources
+                2. Consider the credibility of the video source
+                3. Look for additional context or corroborating evidence
+                4. Be aware that some artificial manipulation may be present
+                
+                **Technical Findings:**
+                - Some analysis methods detected potential issues
+                - Minor inconsistencies found across different verification methods
+                """)
+            elif overall_risk['verdict'] == "LOW RISK":
+                st.info("""
+                **ℹ️ MINIMAL CONCERNS - LOW RISK DETECTED**
+                
+                **General Guidance:**
+                1. Video appears mostly authentic but has minor inconsistencies
+                2. Usable for general reference but verify critical information
+                3. Consider typical video compression artifacts as possible cause
+                
+                **Technical Findings:**
+                - Most analysis methods indicate authenticity
+                - Minor technical anomalies detected
+                """)
+            else:  # AUTHENTIC
+                st.success("""
+                **✅ HIGH CONFIDENCE - AUTHENTIC VIDEO**
+                
+                **Verification Complete:**
+                1. Video appears authentic across all verification methods
+                2. No significant signs of artificial manipulation detected
+                3. Metadata consistent with typical video recordings
+                
+                **Technical Findings:**
+                - All analysis methods confirm authenticity
+                - Consistent results across deepfake, lip sync, and metadata analysis
+                """)
+            
             # Save complete report
             report_path = os.path.join(self.results_dir, f"complete_{os.path.basename(video_path)}.json")
             try:
                 with open(report_path, 'w') as f:
                     json.dump(all_results, f, indent=2, cls=NumpyEncoder)
-                st.success(f"✅ Complete report saved: {report_path}")
                 
                 # Download button
                 with open(report_path, 'r') as f:
@@ -2334,6 +2283,9 @@ def main():
         margin: 1rem 0;
         border-left: 4px solid #667eea;
     }
+    .stSpinner > div {
+        border-color: #667eea !important;
+    }
     </style>
     """, unsafe_allow_html=True)
     
@@ -2363,39 +2315,11 @@ def main():
             if os.path.exists(model_path):
                 available_models[model_name] = model_path
         
-        # Model selection based on mode
+        # Always use all available models for modes that require them
+        selected_models = available_models
+        
+        # Deepfake analysis parameters
         if analysis_mode in ["🤖 Deepfake Detection", "🔬 Complete Analysis (All 3)"]:
-            st.markdown("### 🤖 Model Selection")
-            
-            if analysis_mode == "🤖 Deepfake Detection":
-                # Single or multi-model selection for deepfake detection
-                model_mode = st.radio(
-                    "Model Selection:",
-                    ["Single Model", "Multi-Model Ensemble"],
-                    horizontal=True
-                )
-                
-                if model_mode == "Single Model":
-                    selected_model_name = st.selectbox(
-                        "Choose a model:",
-                        options=list(available_models.keys()),
-                        help="Select a single model for analysis"
-                    )
-                    selected_models = {selected_model_name: available_models[selected_model_name]}
-                else:
-                    selected_model_names = st.multiselect(
-                        "Choose models for ensemble:",
-                        options=list(available_models.keys()),
-                        default=list(available_models.keys())[:min(3, len(available_models))],
-                        help="Select multiple models for ensemble analysis"
-                    )
-                    selected_models = {name: available_models[name] for name in selected_model_names}
-            
-            else:  # Complete Analysis
-                st.info("All available models will be used for complete analysis")
-                selected_models = available_models
-            
-            # Deepfake analysis parameters
             st.markdown("### ⚙️ Deepfake Parameters")
             frames_per_second = st.slider(
                 "Frames per second:",
@@ -2454,9 +2378,7 @@ def main():
         st.markdown("### 📊 System Information")
         st.info(f"**Device:** {'🚀 GPU' if torch.cuda.is_available() else '💻 CPU'}")
         if analysis_mode in ["🤖 Deepfake Detection", "🔬 Complete Analysis (All 3)"]:
-            st.info(f"**Available Models:** {len(available_models)}")
-            if analysis_mode == "🤖 Deepfake Detection":
-                st.info(f"**Selected Models:** {len(selected_models)}")
+            st.info(f"**Models Available:** {len(available_models)}")
         
         # Check ffprobe availability
         try:
@@ -2494,11 +2416,11 @@ def main():
             }
             st.markdown(f"""
             <div class="analysis-card">
-                <h4 style="color: white; margin: 0 0 1rem 0;">📹 Analysis Details</h4>
+                <h4 style="color: white; margin: 0 0 1rem 0;">📹 Video Details</h4>
                 <p style="color: white; margin: 0.5rem 0;"><strong>File:</strong> {uploaded_file.name[:30]}{'...' if len(uploaded_file.name) > 30 else ''}</p>
                 <p style="color: white; margin: 0.5rem 0;"><strong>Size:</strong> {uploaded_file.size / (1024*1024):.2f} MB</p>
                 <p style="color: white; margin: 0.5rem 0;"><strong>Mode:</strong> {analysis_mode}</p>
-                <p style="color: white; margin: 0.5rem 0;"><strong>Description:</strong> {mode_descriptions.get(analysis_mode, 'Custom analysis')}</p>
+                <p style="color: white; margin: 0.5rem 0;"><strong>Analysis:</strong> {mode_descriptions.get(analysis_mode, 'Custom analysis')}</p>
             </div>
             """, unsafe_allow_html=True)
         
@@ -2508,22 +2430,28 @@ def main():
                 # Initialize appropriate pipeline based on selected mode
                 if analysis_mode == "🤖 Deepfake Detection":
                     if not selected_models:
-                        st.error("❌ Please select at least one model for deepfake detection.")
+                        st.error("❌ No models found. Please check your model paths.")
                         return
                     
                     pipeline = DeepfakeDetectionPipeline()
-                    with st.spinner(f"Running deepfake detection with {len(selected_models)} model(s)..."):
+                    with st.spinner(f"Running deepfake detection analysis..."):
                         results = pipeline.analyze_video(video_path, selected_models, frames_per_second)
+                        if results:
+                            pipeline.display_deepfake_report(results["deepfake_analysis"])
                 
                 elif analysis_mode == "👄 Lip Sync Analysis":
                     pipeline = LipSyncAnalyzer()
                     with st.spinner("Running lip sync analysis..."):
                         results = pipeline.analyze_video(video_path, cer_threshold, conf_threshold, freeze_limit)
+                        if results:
+                            pipeline.display_lip_sync_report(results)
                 
                 elif analysis_mode == "🔍 Metadata Analysis":
                     pipeline = MetadataAnalysisPipeline()
                     with st.spinner("Running metadata analysis..."):
                         results = pipeline.analyze_video(video_path, baseline_name)
+                        if results:
+                            pipeline.display_metadata_report(results, video_path)
                 
                 elif analysis_mode == "🔬 Complete Analysis (All 3)":
                     pipeline = CompleteAnalysisPipeline()
